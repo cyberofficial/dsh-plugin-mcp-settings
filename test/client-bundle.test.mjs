@@ -81,19 +81,19 @@ test('the client bundle registers one Settings section over its own route', asyn
     assert.deepEqual(await face.list(), [])
     await face.setEnabled('include:mcp-ghidra', false)
     await face.manage.snapshot()
+    await face.manage.inspect('mcp-ghidra')
     await face.manage.add({ serverName: 'exa' })
+    await face.manage.edit('mcp-ghidra', { serverName: 'ghidra-two' })
     await face.manage.remove('mcp-exa')
 
-    assert.deepEqual(calls.map(call => call.url), [
-      '/api/plugins/mcp-settings/servers',
-      '/api/plugins/mcp-settings/servers',
-      '/api/plugins/mcp-settings/servers',
-    ])
+    assert.deepEqual(calls.map(call => call.url), Array.from({ length: 5 }, () => '/api/plugins/mcp-settings/servers'))
     assert.equal(calls[0].init.method, 'GET')
     assert.equal(calls[0].init.body, undefined)
-    assert.deepEqual(JSON.parse(calls[1].init.body), { action: 'add', server: { serverName: 'exa' } })
-    assert.deepEqual(JSON.parse(calls[2].init.body), { action: 'remove', id: 'mcp-exa' })
-    assert.equal(calls[1].init.headers['content-type'], 'application/json')
+    assert.deepEqual(JSON.parse(calls[1].init.body), { action: 'inspect', id: 'mcp-ghidra' })
+    assert.deepEqual(JSON.parse(calls[2].init.body), { action: 'add', server: { serverName: 'exa' } })
+    assert.deepEqual(JSON.parse(calls[3].init.body), { action: 'edit', id: 'mcp-ghidra', server: { serverName: 'ghidra-two' } })
+    assert.deepEqual(JSON.parse(calls[4].init.body), { action: 'remove', id: 'mcp-exa' })
+    assert.equal(calls[2].init.headers['content-type'], 'application/json')
   } finally {
     delete globalThis.fetch
   }

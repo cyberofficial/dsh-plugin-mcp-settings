@@ -2,9 +2,10 @@
  * Patch-file editing tests.
  *
  * These run against the built host half (`lib/host/patch-text.js`) and check
- * three promises: an appended block leaves every existing line alone, a removal
+ * four promises: an appended block leaves every existing line alone, a removal
  * cuts exactly one server's lines (its `insert` row and its enablement
- * override), and the result still parses as the harness's patch dialect.
+ * override), a rewrite replaces only the row's own config (or its whole managed
+ * block), and every result still parses as the harness's patch dialect.
  */
 
 import assert from 'node:assert/strict'
@@ -17,7 +18,7 @@ const libUrl = new URL('../lib/host/patch-text.js', import.meta.url)
 if (!existsSync(fileURLToPath(libUrl))) {
   throw new Error(`${fileURLToPath(libUrl)} is missing - run "npm run build" first`)
 }
-const { appendServerBlock, listMcpRows, PatchShapeError, removeMcpRow } = await import(libUrl.href)
+const { appendServerBlock, findMcpRow, listMcpRows, PatchShapeError, removeMcpRow, rewriteMcpRow } = await import(libUrl.href)
 const { renderServerBlock } = await import(new URL('../lib/host/servers.js', import.meta.url).href)
 
 const yaml = await loadYaml()
@@ -239,4 +240,134 @@ test('a comment between the insert key and its row is treated as part of the ite
   assert.deepEqual(listMcpRows(text), [{ id: 'mcp-after-comment', managed: false }])
   const removal = removeMcpRow(text, 'mcp-after-comment')
   assert.ok(!removal.text.includes('mcp-after-comment'))
+})
+
+test('findMcpRow reports the item, its config span, and whether a block owns it', () => {
+  const located = findMcpRow(FIXTURE, 'mcp-ghidra')
+  assert.equal(located.block, undefined)
+  assert.equal(FIXTURE.split('\n')[located.item.start].trim(), '- id: mcp-ghidra')
+  // The config value covers the keys and the row's own indented comment.
+  const configLines = FIXTURE.split('\n').slice(located.config.line, located.config.end + 1)
+  assert.equal(configLines[0].trim(), 'config:')
+  assert.ok(configLines.some(line => line.includes('GHIDRA_MCP_URL')))
+  assert.ok(configLines.some(line => line.includes('per-endpoint budgets')))
+  assert.equal(FIXTURE.split('\n')[located.idAt.line].trim(), '- id: mcp-ghidra')
+  assert.equal(findMcpRow(FIXTURE, 'mcp-absent'), undefined)
+})
+
+test('a hand-written rewrite replaces only the config body', { skip }, () => {
+  const rewritten = rewriteMcpRow(FIXTURE, 'mcp-ghidra', {
+    id: 'mcp-ghidra',
+    block: 'unused-for-a-hand-written-row',
+    configBody: ['serverName: ghidra', 'transport: stdio', 'command: uvx', 'args:', '  - bridge'],
+  })
+  const text = rewritten
+  const parsed = parsePatch(yaml, text)
+  assert.deepEqual(insertedConfigs(parsed), [{
+    id: 'mcp-ghidra',
+    config: { serverName: 'ghidra', transport: 'stdio', command: 'uvx', args: ['bridge'] },
+  }])
+  // Banner comments and the neighbouring items are untouched.
+  assert.ok(text.startsWith('# Your patch layer'))
+  assert.ok(text.includes('plugin-provider-disable'))
+  assert.ok(text.includes('preference: dark'))
+  assert.ok(text.includes('# A comment between two items.'))
+  assert.deepEqual(parsed.at(-1), { id: 'mcp-ghidra', disabled: false })
+  // The removed row's own indented note went with the config it documented.
+  assert.ok(!text.includes('per-endpoint budgets'))
+})
+
+test('a rewrite that renames the row renames its override item too', { skip }, () => {
+  const text = rewriteMcpRow(FIXTURE, 'mcp-ghidra', {
+    id: 'mcp-ghidra-two',
+    block: 'unused',
+    configBody: ['serverName: ghidra-two', 'transport: stdio', 'command: node'],
+  })
+  const parsed = parsePatch(yaml, text)
+  assert.deepEqual(insertedConfigs(parsed), [{
+    id: 'mcp-ghidra-two',
+    config: { serverName: 'ghidra-two', transport: 'stdio', command: 'node' },
+  }])
+  assert.deepEqual(parsed.at(-1), { id: 'mcp-ghidra-two', disabled: false })
+  // The old id is gone as an id, even though the new one contains its text.
+  assert.ok(!/id: '?mcp-ghidra'?(?:\s|$)/m.test(text))
+})
+
+test('a managed rewrite swaps the whole block in place', { skip }, () => {
+  const first = renderServerBlock({
+    transport: 'stdio',
+    serverName: 'managed',
+    command: 'node',
+    args: [],
+    env: {},
+    cwd: '',
+    failOnStartupError: false,
+  })
+  const appended = appendServerBlock(FIXTURE, first)
+  const before = appended.split('\n')
+  const text = rewriteMcpRow(appended, 'mcp-managed', {
+    id: 'mcp-managed-two',
+    block: renderServerBlock({
+      transport: 'streamable-http',
+      serverName: 'managed-two',
+      url: 'https://example.com/mcp',
+      headers: { 'x-api-key': 'KEY' },
+      failOnStartupError: false,
+    }),
+    configBody: [],
+  })
+  const after = text.split('\n')
+  // The block sits exactly where it did: same leading lines, same trailing ones.
+  const markerBefore = before.findIndex(line => line.includes('>>> dsh-plugin-mcp-settings: mcp-managed'))
+  const markerAfter = after.findIndex(line => line.includes('>>> dsh-plugin-mcp-settings: mcp-managed-two'))
+  assert.deepEqual(after.slice(0, markerBefore), before.slice(0, markerBefore))
+  assert.equal(markerAfter, markerBefore)
+  assert.deepEqual(insertedConfigs(parsePatch(yaml, text)).map(row => row.id), ['mcp-ghidra', 'mcp-managed-two'])
+  // The append put the block after the override items, and the rewrite left it there.
+  const parsed = parsePatch(yaml, text)
+  assert.deepEqual(parsed.at(-1), {
+    insert: [{
+      id: 'mcp-managed-two',
+      name: '@deepseek-ai/dsh-mcp-client',
+      config: {
+        serverName: 'managed-two',
+        transport: 'streamable-http',
+        url: 'https://example.com/mcp',
+        headers: { 'x-api-key': 'KEY' },
+      },
+    }],
+  })
+  assert.ok(parsed.some(item => item.id === 'mcp-ghidra' && item.disabled === false))
+  assert.ok(!/id: '?mcp-managed'?(?:\s|$)/m.test(text))
+})
+
+test('a rewrite of a managed row keeps CRLF and refuses unknown ids', () => {
+  const block = renderServerBlock({
+    transport: 'stdio',
+    serverName: 'crlf',
+    command: 'node',
+    args: [],
+    env: {},
+    cwd: '',
+    failOnStartupError: false,
+  })
+  const appended = appendServerBlock(FIXTURE.replace(/\n/g, '\r\n'), block)
+  const text = rewriteMcpRow(appended, 'mcp-crlf', {
+    id: 'mcp-crlf-two',
+    block: renderServerBlock({
+      transport: 'stdio',
+      serverName: 'crlf-two',
+      command: 'uvx',
+      args: [],
+      env: {},
+      cwd: '',
+      failOnStartupError: false,
+    }),
+    configBody: [],
+  })
+  assert.ok(text.includes('crlf-two'))
+  assert.ok(!/[^\r]\n/.test(text), 'a bare LF appeared in a CRLF file')
+  assert.equal(rewriteMcpRow(FIXTURE, 'mcp-absent', { id: 'mcp-nope', block: 'x', configBody: [] }), undefined)
+  // A row with no config mapping has nothing this editor may rewrite.
+  assert.equal(rewriteMcpRow('- id: mcp-nothing\n  disabled: false\n', 'mcp-nothing', { id: 'mcp-nothing', block: 'x', configBody: [] }), undefined)
 })

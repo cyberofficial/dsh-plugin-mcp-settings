@@ -55,22 +55,27 @@ function locatePatchFiles(ctx: HostContext): PatchFiles | undefined {
   return { profile: patchPath, home: join(home, PATCH_FILENAME) }
 }
 
-/** Read the live Loader rows that make a new row's id or name unsafe. */
+/** Read the live Loader rows the manager needs to keep identities unique and to prefill an edit. */
 function liveRows(ctx: HostContext): LiveRows {
   const loader = ctx.get('loader') as LoaderService | null | undefined
   const ids: string[] = []
-  const serverNames: string[] = []
+  const serverNames = new Map<string, string>()
+  const configs = new Map<string, unknown>()
   for (const entry of loader?.entries() ?? []) {
     const id = entry.options?.id
-    if (typeof id === 'string') ids.push(id)
+    if (typeof id !== 'string') continue
+    ids.push(id)
     if (entry.options?.name !== MCP_CLIENT_MODULE) continue
     const config = entry.options.config
+    // A disabled row keeps its entry (and so its config), which is what lets a
+    // switched-off server still open in the edit form.
+    configs.set(id, config)
     const serverName = typeof config === 'object' && config !== null
       ? (config as { serverName?: unknown }).serverName
       : undefined
-    if (typeof serverName === 'string') serverNames.push(serverName)
+    if (typeof serverName === 'string') serverNames.set(id, serverName)
   }
-  return { ids, serverNames }
+  return { ids, serverNames, configs }
 }
 
 /**

@@ -4,14 +4,14 @@
  * One card per `@deepseek-ai/dsh-mcp-client` Loader entry, with a live phase
  * dot, an enable/disable switch, and a retry action that restarts the entry
  * (disable, then enable), which re-establishes the MCP connection. The list and
- * those two actions come from the mounted `pluginManager` Remote; adding and
- * removing a server change the profile patch itself and go through this
- * plugin's own host route (`manage`), because no Remote writes Loader rows.
+ * those two actions come from the mounted `pluginManager` Remote; adding,
+ * editing, and removing a server change the patch file itself and go through
+ * this plugin's own host route (`manage`), because no Remote writes Loader rows.
  *
- * A patch write is applied by the harness's own patch watcher, so an added or
- * removed row appears a moment later rather than synchronously. The section
- * therefore re-reads the list on a slow tick while any row is still settling,
- * and for a short window after a mutation.
+ * A patch write is applied by the harness's own patch watcher, so an added,
+ * edited, or removed row appears a moment later rather than synchronously. The
+ * section therefore re-reads the list on a slow tick while any row is still
+ * settling, and for a short window after a mutation.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -19,6 +19,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type { PluginInfo } from '@deepseek-ai/dsh-plugin-manager/types'
 import {
   Button,
+  IconEditOutlineRegular,
   IconPlusOutlineRegular,
   IconRefreshOutlineMedium,
   IconTrashOutlineRegular,
@@ -30,13 +31,14 @@ import {
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   MCP_CLIENT_MODULE,
+  type EditableServer,
   type McpServerDraft,
   type ServersMutation,
   type ServersResponse,
   type ServersSnapshot,
 } from '../shared/spec.ts'
-import { AddServerDialog } from './AddServerDialog.tsx'
-import { serverErrorMessage } from './messages.ts'
+import { ServerDialog } from './ServerDialog.tsx'
+import { blockMessage, serverErrorMessage } from './messages.ts'
 import type { McpSettingsLocaleKey } from './locales.ts'
 import css from './McpServersSection.module.css'
 
@@ -46,12 +48,16 @@ export interface McpServersSectionInjected {
   list: () => Promise<readonly PluginInfo[]>
   /** Persist one row's enablement and reload it live. Throws on failure. */
   setEnabled: (entryId: PluginInfo['entryId'], enabled: boolean) => Promise<void>
-  /** Add and remove servers in the profile patch, through the plugin's host route. */
+  /** Add, edit, and remove servers in the patch, through the plugin's host route. */
   manage: {
     /** Read which patch-file rows exist and where. */
     snapshot: () => Promise<ServersResponse<ServersSnapshot>>
+    /** Read one row's current configuration, for the edit form. */
+    inspect: (id: string) => Promise<ServersResponse<EditableServer>>
     /** Write one new server row. */
     add: (draft: McpServerDraft) => Promise<ServersResponse<ServersMutation>>
+    /** Rewrite one existing server row, renaming it when the name changed. */
+    edit: (id: string, draft: McpServerDraft) => Promise<ServersResponse<ServersMutation>>
     /** Delete one server row and its enablement override. */
     remove: (id: string) => Promise<ServersResponse<ServersMutation>>
   }
@@ -132,6 +138,21 @@ type ViewState =
   | { readonly status: 'error'; readonly message: string }
   | { readonly status: 'ready'; readonly servers: readonly PluginInfo[] }
 
+/** Which dialog is open: the add form, or the edit form for one row id. */
+type DialogState =
+  | { readonly kind: 'closed' }
+  | { readonly kind: 'add' }
+  | {
+    readonly kind: 'edit'
+    readonly id: string
+    readonly loading: boolean
+    readonly draft?: McpServerDraft
+    /** A rename target the host refused, or why this row cannot be rewritten. */
+    readonly blocked?: string
+    /** One extra sentence under the fields (the hand-written note). */
+    readonly note?: string
+  }
+
 /** Render the MCP Servers section. */
 export function McpServersSection({
   t, list, setEnabled, manage,
@@ -142,7 +163,7 @@ export function McpServersSection({
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set())
   const [actionError, setActionError] = useState<string | undefined>()
   const [notice, setNotice] = useState<string | undefined>()
-  const [addOpen, setAddOpen] = useState(false)
+  const [dialog, setDialog] = useState<DialogState>({ kind: 'closed' })
   const [removeTarget, setRemoveTarget] = useState<PluginInfo | undefined>()
   const [removeError, setRemoveError] = useState<string | undefined>()
   const [removing, setRemoving] = useState(false)
@@ -263,6 +284,37 @@ export function McpServersSection({
     return undefined
   }
 
+  /** Open the edit form: show it at once, then fill it from the host's answer. */
+  const openEdit = async (entry: PluginInfo): Promise<void> => {
+    const id = entry.patchId
+    if (id === undefined) return
+    setDialog({ kind: 'edit', id, loading: true })
+    const result = await manage.inspect(id)
+    setDialog((current) => {
+      if (current.kind !== 'edit' || current.id !== id) return current
+      if (!result.ok) return { ...current, loading: false, blocked: serverErrorMessage(result.error, t) }
+      return {
+        ...current,
+        loading: false,
+        draft: result.value.draft,
+        ...result.value.blocked === undefined ? {} : { blocked: blockMessage(result.value.blocked, t) },
+        ...result.value.managed ? {} : { note: t('handWrittenNote') },
+      }
+    })
+  }
+
+  /** Save the edit form's draft back over the row it opened from. */
+  const editServer = async (id: string, draft: McpServerDraft): Promise<string | undefined> => {
+    const result = await manage.edit(id, draft)
+    if (!result.ok) return serverErrorMessage(result.error, t)
+    setDialog({ kind: 'closed' })
+    setActionError(undefined)
+    setNotice(t('edited', { name: draft.serverName }))
+    setMutatedAt(Date.now())
+    reloadAll()
+    return undefined
+  }
+
   const confirmRemove = async (entry: PluginInfo): Promise<void> => {
     const id = entry.patchId
     if (id === undefined) return
@@ -306,7 +358,7 @@ export function McpServersSection({
         <h2 className={css.heading}>{t('title')}</h2>
         <p className={css.intro}>{t('intro')}</p>
       </div>
-      <Button variant="outline" onClick={() => { setAddOpen(true) }}>
+      <Button variant="outline" className={css.headerAction} onClick={() => { setDialog({ kind: 'add' }) }}>
         <IconPlusOutlineRegular size={14} aria-hidden="true" />
         {t('add')}
       </Button>
@@ -359,16 +411,16 @@ export function McpServersSection({
             const locked = entry.readOnlyReason !== undefined
             const patchRow = entry.patchId === undefined ? undefined : patchRows.get(entry.patchId)
             // A row the patch files do not declare comes from a bundle patch or
-            // an overlay: addressable for enablement, not removable from here.
+            // an overlay: addressable for enablement, not editable from here.
             const outside = entry.patchId !== undefined && patch !== undefined && patchRow === undefined && settled
-            const removable = entry.patchId !== undefined && !outside
+            const manageable = entry.patchId !== undefined && !outside
             return (
               <li key={entry.entryId} className={css.card} data-phase={entry.fiberPhase ?? 'off'}>
                 <div className={css.cardMain}>
                   <div className={css.cardText}>
-                    <span className={css.cardTitle}>{displayName(entry)}</span>
+                    <span className={css.cardTitle} title={displayName(entry)}>{displayName(entry)}</span>
                     <span className={css.cardMeta}>
-                      <code className={css.cardModule}>{entry.moduleName}</code>
+                      <code className={css.cardModule} title={entry.moduleName}>{entry.moduleName}</code>
                       {patchRow?.managed === true ? <Tag tone="quiet">{t('managedTag')}</Tag> : null}
                     </span>
                   </div>
@@ -386,7 +438,17 @@ export function McpServersSection({
                         {busy ? t('retrying') : t('retry')}
                       </Button>
                     ) : null}
-                    {!locked && removable ? (
+                    {!locked && manageable ? (
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => { void openEdit(entry) }}
+                      >
+                        <IconEditOutlineRegular size={14} aria-hidden="true" />
+                        {t('edit')}
+                      </Button>
+                    ) : null}
+                    {!locked && manageable ? (
                       <Button
                         variant="outline"
                         disabled={busy}
@@ -425,11 +487,25 @@ export function McpServersSection({
       ) : null}
       <p className={css.hint}>{t('configHint')}</p>
 
-      {addOpen ? (
-        <AddServerDialog
+      {dialog.kind === 'add' ? (
+        <ServerDialog
+          mode="add"
           t={t}
-          onClose={() => { setAddOpen(false) }}
+          onClose={() => { setDialog({ kind: 'closed' }) }}
           onSubmit={addServer}
+        />
+      ) : null}
+
+      {dialog.kind === 'edit' ? (
+        <ServerDialog
+          mode="edit"
+          t={t}
+          loading={dialog.loading}
+          draft={dialog.draft}
+          blocked={dialog.blocked}
+          note={dialog.note}
+          onClose={() => { setDialog({ kind: 'closed' }) }}
+          onSubmit={draft => editServer(dialog.id, draft)}
         />
       ) : null}
 

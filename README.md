@@ -10,6 +10,7 @@
 |---------|-------------|
 | **Settings nav entry** | "MCP Servers" appears in the left sidebar (order 25, after *Agent presets*) |
 | **Add a server** | A dialog writes one canonical `insert` row into your profile patch: stdio (`command`, `args`, `env`, `cwd`) or Streamable HTTP (`url`, **custom headers**) |
+| **Edit a server** | **Edit** opens the same dialog on the running entry's *current* values (read from the live Loader, not from the file) and writes them back in place — including renaming the server and switching its transport |
 | **Remove a server** | Per-row **Remove** with confirmation; deletes the row *and* the enable/disable override the switch wrote, leaving every other line — and every comment — of your patch file untouched |
 | **Live status** | Each card shows a phase dot (pending / loading / active / failed / unloading / off) |
 | **Enable / Disable** | Toggle persists to the profile patch and reloads the entry live |
@@ -61,7 +62,21 @@ Restart the harness. The plugin composes via its own `cordis.patch.yml` (single 
    - *HTTP*: **URL**, **Headers** (`Name: value` per line).
    - **Tool call timeout (ms)** — empty uses the `mcp-client` default (60000).
    - **Fail activation when the first connection fails** — maps to `failOnStartupError`.
-3. Each row card offers **Retry**, **Remove**, and the enable/disable **switch**.
+3. Each row card offers **Retry**, **Edit**, **Remove**, and the enable/disable **switch**.
+
+### Editing a server
+
+**Edit** reopens the same dialog on the values the *running entry* is using — the host reads them from the live Loader, which has already interpolated `!!js` expressions and filled in the schema defaults, so no YAML is parsed and nothing is guessed from the file text. Saving:
+
+- replaces a row this panel added (the whole marker block) at its existing position, and renames its marker and its `- id:` override when the server name changed;
+- rewrites only the `config:` block of a hand-written row, keeping the row's own lines, its banners, and everything around it.
+
+Two rows refuse to open instead of risking a wrong write, and the dialog says why:
+
+| Blocked when | Why |
+|---|---|
+| The row's text contains `!!js` | A form would save the *interpolated* value back over the expression — for a token, that writes the secret into the file |
+| The live entry exposes no config this form can round-trip | Nothing to prefill from; edit the file by hand |
 
 ### Authentication examples
 
@@ -136,15 +151,15 @@ Both halves are staged into `D:\github\deepseek-harness\.mcp-settings-build`, co
 npm test          # build first: the tests import lib/
 ```
 
-27 tests cover the patch-file editor (append, marker removal, hand-written removal, shared inserts, CRLF, empty files — each result re-parsed with the harness's own `yaml`), the host route contract over an in-memory store, the host wiring against a real temporary patch file, and the browser bundle's registration and fetch contract.
+38 tests cover the patch-file editor (append, marker removal, hand-written removal, shared inserts, in-place rewrites and id renames, CRLF, empty files — each result re-parsed with the harness's own `yaml`), the host route contract over an in-memory store (including `inspect` and the edit refusals), the host wiring against a real temporary patch file, and the browser bundle's registration and fetch contract.
 
 ### Verify composition end to end
 
-`_verify/mcp-settings-compose-probe.mjs` (in the workspace) builds a throwaway profile whose patch was written by the plugin's own host half, so the harness composes it for real:
+`_verify/mcp-settings-compose-probe.mjs` (in the workspace) builds a throwaway profile and drives the host half's own route through add → inspect → edit on real files, so the harness composes the result for real:
 
 ```powershell
 $out = node _verify\mcp-settings-compose-probe.mjs
-$env:DSH_HOME = ($out -split "`n")[0].Trim()
+$lines = $out -split "`n"; $env:DSH_HOME = $lines[[Array]::IndexOf($lines,'---') - 1].Trim()
 node D:\github\deepseek-harness\apps\cli\lib\bin.js --profile mcp-probe --dump-config
 ```
 
@@ -152,16 +167,16 @@ node D:\github\deepseek-harness\apps\cli\lib\bin.js --profile mcp-probe --dump-c
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Host half: registers the exact fetch route, locates the profile patch, reads live Loader rows |
+| `src/index.ts` | Host half: registers the exact fetch route, locates the profile patch, reads live Loader rows and their resolved configs |
 | `src/host/contract.ts` | The two host contracts (ctx surface, `connection.fetch`) declared structurally — no harness type imports |
-| `src/host/patch-text.ts` | Comment-preserving patch editing: marker blocks, `insert` item spans, override items, CRLF |
-| `src/host/servers.ts` | Snapshot / add / remove over a `PatchStore`, canonical YAML rendering, refuse-and-report errors |
+| `src/host/patch-text.ts` | Comment-preserving patch editing: marker blocks, `insert` item spans, override items, in-place rewrites, CRLF |
+| `src/host/servers.ts` | Snapshot / inspect / add / edit / remove over a `PatchStore`, canonical YAML rendering, refuse-and-report errors |
 | `src/host/fs-store.ts` | Atomic patch writes (temp file + rename) the HMR watcher never sees half-written |
-| `src/shared/spec.ts` | Wire contract plus draft validation shared by both halves (`SERVERS_PATH`, `validateDraft`, `rowIdFor`) |
+| `src/shared/spec.ts` | Wire contract, draft validation, and `draftOfConfig` (the resolved-config inverse) shared by both halves |
 | `src/client/index.ts` | Client `apply` — registers `settings.section`, injects `list`/`setEnabled` (Remote) and `manage` (own route) |
-| `src/client/McpServersSection.tsx` | Section: header + Add, server cards, remove confirmation, settling poll |
-| `src/client/AddServerDialog.tsx` | Add form, per-transport fields, inline validation |
-| `src/client/messages.ts` | Validation problems and host refusals turned into localized sentences |
+| `src/client/McpServersSection.tsx` | Section: header + Add, server cards, edit and remove flows, settling poll |
+| `src/client/ServerDialog.tsx` | The add/edit form, per-transport fields, inline validation, blocked-row states |
+| `src/client/messages.ts` | Validation problems, blocked reasons, and host refusals turned into localized sentences |
 | `src/client/locales.ts` | `en`/`zh` dictionaries plus `McpSettingsLocaleKey` |
 | `cordis.patch.yml` | Composition row: `- insert: - id: plugin-mcp-settings, name: dsh-plugin-mcp-settings` |
 
@@ -172,11 +187,15 @@ node D:\github\deepseek-harness\apps\cli\lib\bin.js --profile mcp-probe --dump-c
 ### Two transports for two kinds of work
 
 - **The mounted `pluginManager` Remote** already handles the list, the enable/disable switch, and the retry action: `listPlugins` (with each row's patch addressability) and `setPluginEnabled`.
-- **Nothing in the harness exposes "write a Loader row"**, so adding and removing go through this plugin's own host half: one exact route on the shared `/api` channel (`connection.fetch.register`), which already applies the Host/Origin fence and browser authentication. Typert remotes have a static namespace mount list that external plugins cannot extend, which is why the plugin uses a fetch route rather than a remote namespace.
+- **Nothing in the harness exposes "write a Loader row"**, so adding, editing, and removing go through this plugin's own host half: one exact route on the shared `/api` channel (`connection.fetch.register`), which already applies the Host/Origin fence and browser authentication. Typert remotes have a static namespace mount list that external plugins cannot extend, which is why the plugin uses a fetch route rather than a remote namespace.
 
 ### Editing someone else's YAML
 
-The profile patch is a person's file: comments, hand-written rows, and the `disabled` overrides the built-in Plugins page appends. The host half therefore never re-serializes it — it appends one canonical block and removes exact line spans computed from indentation. A removal that cannot identify a unique span changes nothing and reports why.
+The profile patch is a person's file: comments, hand-written rows, and the `disabled` overrides the built-in Plugins page appends. The host half therefore never re-serializes it — it appends one canonical block, removes exact line spans computed from indentation, and rewrites a row by substituting its own block (managed) or just its `config:` body (hand-written). An edit that cannot identify a unique span, or that would flatten a `!!js` expression, changes nothing and reports why.
+
+### Where the edit form's values come from
+
+`inspect` reads the row's configuration out of the *live Loader entry* (`entry.options.config`), not out of the file. The loader has already interpolated `!!js` and applied the schema's defaults, so the form opens on what the running server actually uses; the `!!js` guard exists precisely because that is the wrong thing to write back into a file that holds an expression. Disabled rows keep their entry, so a switched-off server still opens for editing.
 
 ### Applying a change
 
@@ -199,7 +218,9 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Add server" reports a refusal, or the patch hint is missing | The host half is not loaded yet | Restart the harness after building: host-module changes are not hot-reloaded |
+| "Add server" or "Edit" reports a refusal, or the patch hint is missing | The host half is not loaded yet | Restart the harness after building: host-module changes are not hot-reloaded |
+| Edit opens but says the row carries `!!js` | The row's text holds an expression a form must not flatten | Edit that row in your patch file |
+| Edit opens but says the entry exposes no configuration | Nothing to prefill from (an unusual or failed compose) | Edit that row in your patch file |
 | Server added but no row appears | The profile has no patch watcher, or the entry failed to start | The page says so when there is no watcher; otherwise check the phase dot and `C:\Users\<you>\.dsh\logs\` |
 | `The patch file could not be edited` | The patch file is not a top-level YAML sequence | Repair the file (`[]` is valid and empty); nothing was written |
 | `A row named … already exists` | The id or `serverName` is taken | Pick another name, or remove the existing row first |
@@ -207,7 +228,7 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 | "MCP Servers" nav missing | Plugin not loaded / client bundle not served | Restart the harness; hard-refresh the browser (Ctrl+Shift+R) |
 | Retry does nothing | Entry has `readOnlyReason: 'unaddressable'` (bundle patch origin) | Install the MCP server into your profile instead of the bundle |
 | Toggle doesn't persist | Profile patch not writable / junction broken | Verify `node_modules\dsh-plugin-mcp-settings` points to the source |
-| `failed to import` on startup | Corrupted `lib/index.js` | Rebuild: `node scripts/build-client.mjs` |
+| `failed to import` on startup | Corrupted `lib/index.js`, or a restart that landed mid-build (the build rewrites `lib/` in place) | Rebuild: `node scripts/build-client.mjs`, then restart once it finishes |
 | `@tsdown/css not installed` | Missing build peer dep | `pnpm add -w @tsdown/css` at the checkout root |
 
 ### Logs

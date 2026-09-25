@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   SERVERS_PATH,
+  type EditableServer,
   type McpServerDraft,
   type ServersMutation,
   type ServersResponse,
@@ -105,7 +106,9 @@ export function apply(ctx: ClientContext): void {
     },
     manage: {
       snapshot: () => send<ServersSnapshot>('GET'),
+      inspect: (id: string) => send<EditableServer>('POST', { action: 'inspect', id }),
       add: (draft: McpServerDraft) => send<ServersMutation>('POST', { action: 'add', server: draft }),
+      edit: (id: string, draft: McpServerDraft) => send<ServersMutation>('POST', { action: 'edit', id, server: draft }),
       remove: (id: string) => send<ServersMutation>('POST', { action: 'remove', id }),
     },
   })

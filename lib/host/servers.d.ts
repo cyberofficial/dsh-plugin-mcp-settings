@@ -1,5 +1,5 @@
 /**
- * The host half's MCP server manager: snapshot, add, and remove.
+ * The host half's MCP server manager: snapshot, inspect, add, edit, and remove.
  *
  * Every mutation is a read-modify-write of one patch file through
  * {@link PatchStore} (the filesystem in production, a Map in tests), performed
@@ -24,12 +24,14 @@ export interface PatchStore {
     /** Replace one file's contents. */
     write(path: string, text: string): Promise<void>;
 }
-/** Live Loader facts that make a new row's identity safe. */
+/** Live Loader facts that make a row's identity safe and its config editable. */
 export interface LiveRows {
     /** Patch row id every live entry declares. */
     readonly ids: readonly string[];
-    /** `serverName` every live `mcp-client` entry reserves. */
-    readonly serverNames: readonly string[];
+    /** `serverName` per live `mcp-client` row id, for duplicate detection and renames. */
+    readonly serverNames: ReadonlyMap<string, string>;
+    /** Resolved `config` per live `mcp-client` row id, for the edit form. */
+    readonly configs: ReadonlyMap<string, unknown>;
 }
 /** An expected refusal, carried to the browser as a structured error. */
 export declare class ServersFault extends Error {
@@ -55,6 +57,8 @@ export interface ServersService {
     /** Answer one request on the plugin's own `/api` route. */
     request(request: Request): Promise<Response>;
 }
+/** The `config:` body of one server at zero base indent, for an in-place row rewrite. */
+export declare function configBodyLines(spec: McpServerSpec): string[];
 /** The canonical, marker-delimited `insert` block for one server. */
 export declare function renderServerBlock(spec: McpServerSpec): string;
 /**

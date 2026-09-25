@@ -8,8 +8,13 @@
  * @module dsh-plugin-mcp-settings/client/messages
  */
 
-import type { ServerError, SpecProblem } from '../shared/spec.ts'
+import type { EditBlock, ServerError, SpecProblem } from '../shared/spec.ts'
 import type { McpTranslate } from './locales.ts'
+
+/** Why the edit form refuses to save one row. */
+export function blockMessage(block: EditBlock, t: McpTranslate): string {
+  return block === 'js-expression' ? t('blockedJs') : t('blockedConfig')
+}
 
 /** Message for one validation problem, including the offending line when known. */
 export function problemMessage(problem: SpecProblem, t: McpTranslate): string {

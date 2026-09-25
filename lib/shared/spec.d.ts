@@ -160,10 +160,28 @@ export interface ServersSnapshot {
 }
 /** What one successful mutation reports. */
 export interface ServersMutation {
+    /** The row id after the operation: an edit that renames the server reports the new one. */
     readonly id: string;
     readonly file: PatchFileKind;
-    /** What the edit removed: the row, its enablement override, or both. */
+    /** What the operation removed: the row, its enablement override, or both. */
     readonly removed: readonly ('row' | 'override')[];
+}
+/** Why this panel cannot rewrite one row in place. */
+export type EditBlock = 
+/** The row's lines carry `!!js` expressions a form would flatten into values. */
+'js-expression'
+/** The live entry exposes no config this form can round-trip. */
+ | 'unknown-config';
+/** What the edit form opens with, read on demand so secrets stay out of the list. */
+export interface EditableServer {
+    readonly id: string;
+    readonly file: PatchFileKind;
+    /** True when this panel's own marker block wraps the row. */
+    readonly managed: boolean;
+    /** The configuration the form opens with; empty while {@link EditableServer.blocked} is set. */
+    readonly draft: McpServerDraft;
+    /** Set when the row cannot be rewritten from here; the form refuses to save. */
+    readonly blocked?: EditBlock;
 }
 /** Wire answer of every request on {@link SERVERS_PATH}. */
 export type ServersResponse<T> = {
@@ -178,9 +196,29 @@ export type ServersRequest = {
     readonly action: 'add';
     readonly server: unknown;
 } | {
+    readonly action: 'edit';
+    readonly id: unknown;
+    readonly server: unknown;
+} | {
     readonly action: 'remove';
+    readonly id: unknown;
+} | {
+    readonly action: 'inspect';
     readonly id: unknown;
 };
 /** An empty draft, for the Add dialog's initial state. */
 export declare function emptyDraft(): McpServerDraft;
+/**
+ * Turn one resolved `mcp-client` config back into the dialog's flat draft.
+ *
+ * The host reads this from the live Loader entry rather than from the patch
+ * file: the loader has already interpolated `!!js` expressions and applied the
+ * schema's defaults, so the form opens on the values the running server uses.
+ * (A row whose *file text* carries `!!js` is refused before this is called,
+ * because writing the interpolated value back would flatten the expression.)
+ *
+ * @param config - the entry's resolved `config`, of unknown shape.
+ * @returns the draft, or undefined when the shape is not one this form can edit.
+ */
+export declare function draftOfConfig(config: unknown): McpServerDraft | undefined;
 //# sourceMappingURL=spec.d.ts.map

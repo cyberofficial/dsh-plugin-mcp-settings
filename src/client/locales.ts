@@ -63,6 +63,18 @@ export const en = {
   save: 'Add',
   close: 'Close',
 
+  // Edit
+  edit: 'Edit',
+  editTitle: 'Edit MCP server',
+  editIntro: 'Saves this server back into your patch and remounts it live.',
+  editing: 'Saving...',
+  edited: 'Server updated: {name}',
+  editFailed: 'The server was not updated',
+  loadingConfig: 'Loading current settings...',
+  handWrittenNote: 'This row was written by hand. Saving rewrites its config block and keeps every other line of the file.',
+  blockedJs: 'This row carries !!js expressions, which a form would replace with their current values. Edit it in your patch file instead.',
+  blockedConfig: 'The running entry exposes no configuration this form can rewrite. Edit it in your patch file instead.',
+
   // Remove
   remove: 'Remove',
   removeTitle: 'Remove MCP server',
@@ -154,6 +166,17 @@ export const zh = {
   cancel: '取消',
   save: '添加',
   close: '关闭',
+
+  edit: '编辑',
+  editTitle: '编辑 MCP 服务器',
+  editIntro: '会把该服务器写回你的配置文件并即时重新挂载。',
+  editing: '正在保存...',
+  edited: '已更新服务器：{name}',
+  editFailed: '更新服务器失败',
+  loadingConfig: '正在读取当前设置...',
+  handWrittenNote: '该记录是手工编写的。保存会重写它的 config 区块，文件其余内容保持不变。',
+  blockedJs: '该记录包含 !!js 表达式，表单会把它们替换为当前值。请在配置文件中手动编辑。',
+  blockedConfig: '运行中的条目没有本表单可重写的配置，请在配置文件中手动编辑。',
 
   remove: '删除',
   removeTitle: '删除 MCP 服务器',

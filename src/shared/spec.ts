@@ -343,10 +343,30 @@ export interface ServersSnapshot {
 
 /** What one successful mutation reports. */
 export interface ServersMutation {
+  /** The row id after the operation: an edit that renames the server reports the new one. */
   readonly id: string
   readonly file: PatchFileKind
-  /** What the edit removed: the row, its enablement override, or both. */
+  /** What the operation removed: the row, its enablement override, or both. */
   readonly removed: readonly ('row' | 'override')[]
+}
+
+/** Why this panel cannot rewrite one row in place. */
+export type EditBlock =
+  /** The row's lines carry `!!js` expressions a form would flatten into values. */
+  | 'js-expression'
+  /** The live entry exposes no config this form can round-trip. */
+  | 'unknown-config'
+
+/** What the edit form opens with, read on demand so secrets stay out of the list. */
+export interface EditableServer {
+  readonly id: string
+  readonly file: PatchFileKind
+  /** True when this panel's own marker block wraps the row. */
+  readonly managed: boolean
+  /** The configuration the form opens with; empty while {@link EditableServer.blocked} is set. */
+  readonly draft: McpServerDraft
+  /** Set when the row cannot be rewritten from here; the form refuses to save. */
+  readonly blocked?: EditBlock
 }
 
 /** Wire answer of every request on {@link SERVERS_PATH}. */
@@ -355,7 +375,9 @@ export type ServersResponse<T> = { readonly ok: true; readonly value: T } | { re
 /** Request body of `POST` on {@link SERVERS_PATH}. */
 export type ServersRequest =
   | { readonly action: 'add'; readonly server: unknown }
+  | { readonly action: 'edit'; readonly id: unknown; readonly server: unknown }
   | { readonly action: 'remove'; readonly id: unknown }
+  | { readonly action: 'inspect'; readonly id: unknown }
 
 /** An empty draft, for the Add dialog's initial state. */
 export function emptyDraft(): McpServerDraft {
@@ -370,5 +392,92 @@ export function emptyDraft(): McpServerDraft {
     headersText: '',
     toolCallTimeoutMs: '',
     failOnStartupError: false,
+  }
+}
+
+/** Render one string record as a textarea body. */
+function recordLines(record: Readonly<Record<string, string>>, separator: '=' | ':'): string {
+  return Object.entries(record)
+    .map(([key, value]) => (separator === '=' ? `${key}=${value}` : `${key}: ${value}`))
+    .join('\n')
+}
+
+/** A string record, or undefined when the value is not one this form can round-trip. */
+function recordOf(value: unknown): Record<string, string> | undefined {
+  if (value === undefined || value === null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record: Record<string, string> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== 'string' || CONTROL_CHARACTERS.test(entry) || CONTROL_CHARACTERS.test(key)) return undefined
+    record[key] = entry
+  }
+  return record
+}
+
+/**
+ * Turn one resolved `mcp-client` config back into the dialog's flat draft.
+ *
+ * The host reads this from the live Loader entry rather than from the patch
+ * file: the loader has already interpolated `!!js` expressions and applied the
+ * schema's defaults, so the form opens on the values the running server uses.
+ * (A row whose *file text* carries `!!js` is refused before this is called,
+ * because writing the interpolated value back would flatten the expression.)
+ *
+ * @param config - the entry's resolved `config`, of unknown shape.
+ * @returns the draft, or undefined when the shape is not one this form can edit.
+ */
+export function draftOfConfig(config: unknown): McpServerDraft | undefined {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined
+  const value = config as Record<string, unknown>
+  const serverName = typeof value.serverName === 'string' ? value.serverName : undefined
+  if (serverName === undefined) return undefined
+  const transport = value.transport === 'streamable-http' ? 'streamable-http'
+    : value.transport === 'stdio' ? 'stdio' : undefined
+  if (transport === undefined) return undefined
+  const timeout = typeof value.toolCallTimeoutMs === 'number' && Number.isSafeInteger(value.toolCallTimeoutMs)
+    ? String(value.toolCallTimeoutMs)
+    : ''
+  const base = {
+    serverName,
+    transport,
+    toolCallTimeoutMs: timeout,
+    failOnStartupError: value.failOnStartupError === true,
+  } as const
+
+  if (transport === 'stdio') {
+    const command = value.command
+    if (typeof command !== 'string' || CONTROL_CHARACTERS.test(command)) return undefined
+    const args = value.args === undefined
+      ? []
+      : Array.isArray(value.args)
+        && value.args.every(argument => typeof argument === 'string' && !CONTROL_CHARACTERS.test(argument))
+        ? value.args as string[]
+        : undefined
+    if (args === undefined) return undefined
+    const env = recordOf(value.env)
+    if (env === undefined) return undefined
+    return {
+      ...base,
+      command,
+      argsText: args.join('\n'),
+      envText: recordLines(env, '='),
+      cwd: typeof value.cwd === 'string' && !CONTROL_CHARACTERS.test(value.cwd) ? value.cwd : '',
+      url: '',
+      headersText: '',
+    }
+  }
+
+  const url = typeof value.url === 'string' ? value.url : undefined
+  if (url === undefined) return undefined
+  const headers = recordOf(value.headers)
+  if (headers === undefined) return undefined
+  return {
+    ...base,
+    command: '',
+    argsText: '',
+    envText: '',
+    cwd: '',
+    url,
+    headersText: recordLines(headers, ':'),
   }
 }

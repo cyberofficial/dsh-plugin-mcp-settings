@@ -15,6 +15,12 @@
   gap: 16px;
 }
 
+/* The header action keeps its own line rather than breaking mid-label. */
+.headerAction {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .headerText {
   display: flex;
   flex-direction: column;
@@ -96,15 +102,20 @@
 }
 
 .cardMain {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  /* Wrapping flex, not a fixed grid: the card's controls and status row must
+     never squeeze the server's name down to an ellipsis. When the three groups
+     do not fit on one line, the controls wrap below and the name keeps its
+     minimum width. */
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 10px 14px;
 }
 
 .cardText {
   display: flex;
+  flex: 1 1 240px;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -113,15 +124,16 @@
 .cardTitle {
   font-size: 14px;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wraps rather than truncates: `mcp-<serverName>` is the row's identity. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .cardMeta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -131,13 +143,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 
 .cardStatus {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .phase {
@@ -152,8 +166,10 @@
 
 .cardControls {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 10px;
+  margin-left: auto;
 }
 
 /* --- Add / remove dialogs ------------------------------------------------ */
@@ -186,6 +202,15 @@
   font-size: 12px;
   color: var(--dsw-alias-label-error);
   overflow-wrap: anywhere;
+}
+
+.dialogNotice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .field {
@@ -234,18 +259,20 @@
   padding-top: 2px;
 }
 
-@media (max-width: 640px) {
-  .cardMain {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
-  .cardStatus {
-    justify-content: flex-start;
-  }
-
+@media (max-width: 760px) {
+  /* The card controls already wrap; here the header itself stacks so the
+     heading keeps the full width and the action stays one unbroken label. */
   .header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .headerAction {
+    align-self: flex-start;
+  }
+
+  .cardStatus,
+  .cardControls {
+    margin-left: 0;
   }
 }

@@ -1,5 +1,5 @@
 /**
- * The host half's MCP server manager: snapshot, add, and remove.
+ * The host half's MCP server manager: snapshot, inspect, add, edit, and remove.
  *
  * Every mutation is a read-modify-write of one patch file through
  * {@link PatchStore} (the filesystem in production, a Map in tests), performed
@@ -11,9 +11,12 @@
  */
 
 import {
+  draftOfConfig,
+  emptyDraft,
   MCP_CLIENT_MODULE,
   rowIdFor,
   validateDraft,
+  type EditableServer,
   type McpServerSpec,
   type PatchFileKind,
   type PatchRowInfo,
@@ -28,9 +31,13 @@ import {
   appendServerBlock,
   blockBeginMarker,
   blockEndMarker,
+  findMcpRow,
   listMcpRows,
   PatchShapeError,
   removeMcpRow,
+  rewriteMcpRow,
+  yamlScalar,
+  type McpRowLocation,
 } from './patch-text.js'
 
 /** Absolute paths of the two patch layers this panel may rewrite. */
@@ -49,12 +56,14 @@ export interface PatchStore {
   write(path: string, text: string): Promise<void>
 }
 
-/** Live Loader facts that make a new row's identity safe. */
+/** Live Loader facts that make a row's identity safe and its config editable. */
 export interface LiveRows {
   /** Patch row id every live entry declares. */
   readonly ids: readonly string[]
-  /** `serverName` every live `mcp-client` entry reserves. */
-  readonly serverNames: readonly string[]
+  /** `serverName` per live `mcp-client` row id, for duplicate detection and renames. */
+  readonly serverNames: ReadonlyMap<string, string>
+  /** Resolved `config` per live `mcp-client` row id, for the edit form. */
+  readonly configs: ReadonlyMap<string, unknown>
 }
 
 /** An expected refusal, carried to the browser as a structured error. */
@@ -101,57 +110,62 @@ export interface ServersService {
   request(request: Request): Promise<Response>
 }
 
-/** Render one YAML scalar, single-quoted unless plainly safe. */
-function scalar(value: string): string {
-  const plain = /^[A-Za-z0-9_][A-Za-z0-9_./\\-]*$/.test(value)
-  const reserved = /^(?:true|false|null|yes|no|on|off|y|n|~)$/i.test(value) || /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(value)
-  if (value !== '' && plain && !reserved) return value
-  return `'${value.replace(/'/g, "''")}'`
-}
-
 /** One `key: value` line at the given indent. */
 function entry(indent: number, key: string, value: string): string {
-  return `${' '.repeat(indent)}${key}: ${scalar(value)}`
+  return `${' '.repeat(indent)}${key}: ${yamlScalar(value)}`
+}
+
+/** The `config:` mapping of one server, as lines indented from the given base. */
+function configLines(spec: McpServerSpec, indent: number): string[] {
+  const pad = ' '.repeat(indent)
+  const lines: string[] = [
+    entry(indent, 'serverName', spec.serverName),
+    entry(indent, 'transport', spec.transport),
+  ]
+  if (spec.transport === 'stdio') {
+    lines.push(entry(indent, 'command', spec.command))
+    if (spec.args.length > 0) {
+      lines.push(`${pad}args:`)
+      for (const argument of spec.args) lines.push(`${' '.repeat(indent + 2)}- ${yamlScalar(argument)}`)
+    }
+    const env = Object.entries(spec.env)
+    if (env.length > 0) {
+      lines.push(`${pad}env:`)
+      for (const [key, value] of env) lines.push(entry(indent + 2, key, value))
+    }
+    if (spec.cwd !== '') lines.push(entry(indent, 'cwd', spec.cwd))
+  } else {
+    lines.push(entry(indent, 'url', spec.url))
+    const headers = Object.entries(spec.headers)
+    if (headers.length > 0) {
+      lines.push(`${pad}headers:`)
+      for (const [key, value] of headers) lines.push(entry(indent + 2, key, value))
+    }
+  }
+  const timeout = spec.toolCallTimeoutMs
+  if (timeout !== undefined) lines.push(`${pad}toolCallTimeoutMs: ${String(timeout)}`)
+  if (spec.failOnStartupError) lines.push(`${pad}failOnStartupError: true`)
+  return lines
+}
+
+/** The `config:` body of one server at zero base indent, for an in-place row rewrite. */
+export function configBodyLines(spec: McpServerSpec): string[] {
+  return configLines(spec, 0)
 }
 
 /** The canonical, marker-delimited `insert` block for one server. */
 export function renderServerBlock(spec: McpServerSpec): string {
   const id = rowIdFor(spec.serverName)
-  const lines: string[] = [
+  return [
     blockBeginMarker(id),
     '# Added by the MCP Servers settings panel. Edit or delete this whole block there.',
     '- insert:',
     `    - id: ${id}`,
     `      name: '${MCP_CLIENT_MODULE}'`,
     '      config:',
-    entry(8, 'serverName', spec.serverName),
-    entry(8, 'transport', spec.transport),
-  ]
-  if (spec.transport === 'stdio') {
-    lines.push(entry(8, 'command', spec.command))
-    if (spec.args.length > 0) {
-      lines.push('        args:')
-      for (const argument of spec.args) lines.push(`          - ${scalar(argument)}`)
-    }
-    const env = Object.entries(spec.env)
-    if (env.length > 0) {
-      lines.push('        env:')
-      for (const [key, value] of env) lines.push(entry(10, key, value))
-    }
-    if (spec.cwd !== '') lines.push(entry(8, 'cwd', spec.cwd))
-  } else {
-    lines.push(entry(8, 'url', spec.url))
-    const headers = Object.entries(spec.headers)
-    if (headers.length > 0) {
-      lines.push('        headers:')
-      for (const [key, value] of headers) lines.push(entry(10, key, value))
-    }
-  }
-  const timeout = spec.toolCallTimeoutMs
-  if (timeout !== undefined) lines.push(`        toolCallTimeoutMs: ${String(timeout)}`)
-  if (spec.failOnStartupError) lines.push('        failOnStartupError: true')
-  lines.push(blockEndMarker(id))
-  return lines.join('\n')
+    ...configLines(spec, 8),
+    blockEndMarker(id),
+  ].join('\n')
 }
 
 /**
@@ -205,6 +219,40 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     return ids
   }
 
+  /** Find the layer that declares one row, with its location and `!!js` usage. */
+  async function locate(id: string): Promise<{
+    readonly layer: { readonly kind: PatchFileKind; readonly path: string }
+    readonly text: string
+    readonly location: McpRowLocation
+    readonly jsExpression: boolean
+  } | undefined> {
+    for (const layer of layers()) {
+      const text = await readLayer(layer.path)
+      if (text === undefined) continue
+      const location = findMcpRow(text, id)
+      if (location === undefined) continue
+      const span = location.block ?? location.item
+      const lines = text.split(/\r?\n/)
+      return {
+        layer,
+        text,
+        location,
+        // A `!!js` value would be written back as its interpolated result, so
+        // such a row is reported as uneditable from here.
+        jsExpression: lines.slice(span.start, span.end + 1).some(line => line.includes('!!js')),
+      }
+    }
+    return undefined
+  }
+
+  /** Read one row id from the request body. */
+  function requireId(id: unknown, action: 'remove' | 'edit' | 'inspect'): string {
+    if (typeof id !== 'string' || id.trim() === '') {
+      throw new ServersFault('bad-request', undefined, `expected { "action": "${action}", "id": string }`)
+    }
+    return id.trim()
+  }
+
   async function snapshot(): Promise<ServersSnapshot> {
     const [profileLayer, homeLayer] = layers()
     const rows: PatchRowInfo[] = []
@@ -221,6 +269,18 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     }
   }
 
+  /** Read the values the edit form opens with, from the running entry. */
+  async function inspect(rawId: unknown): Promise<EditableServer> {
+    const id = requireId(rawId, 'inspect')
+    const found = await locate(id)
+    if (found === undefined) throw new ServersFault('not-found', undefined, id)
+    const base = { id, file: found.layer.kind, managed: found.location.block !== undefined }
+    if (found.jsExpression) return { ...base, draft: emptyDraft(), blocked: 'js-expression' }
+    const draft = draftOfConfig(options.live().configs.get(id))
+    if (draft === undefined) return { ...base, draft: emptyDraft(), blocked: 'unknown-config' }
+    return { ...base, draft }
+  }
+
   async function add(server: unknown): Promise<ServersMutation> {
     const result = validateDraft(server)
     if (!result.ok) throw new ServersFault('invalid-spec', result.problems)
@@ -233,7 +293,7 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     }
     const live = options.live()
     if (live.ids.includes(id)) throw new ServersFault('duplicate-id', undefined, id)
-    if (live.serverNames.includes(spec.serverName)) {
+    if ([...live.serverNames.values()].includes(spec.serverName)) {
       throw new ServersFault('duplicate-name', undefined, spec.serverName)
     }
     try {
@@ -245,11 +305,44 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     return { id, file: profileLayer.kind, removed: [] }
   }
 
-  async function remove(id: unknown): Promise<ServersMutation> {
-    if (typeof id !== 'string' || id.trim() === '') {
-      throw new ServersFault('bad-request', undefined, 'expected { "action": "remove", "id": string }')
+  /** Rewrite one server row in place, renaming it when the name changed. */
+  async function edit(rawId: unknown, server: unknown): Promise<ServersMutation> {
+    const id = requireId(rawId, 'edit')
+    const result = validateDraft(server)
+    if (!result.ok) throw new ServersFault('invalid-spec', result.problems)
+    const spec = result.spec
+    const newId = rowIdFor(spec.serverName)
+    const found = await locate(id)
+    if (found === undefined) throw new ServersFault('not-found', undefined, id)
+    if (found.jsExpression) throw new ServersFault('unsupported', undefined, 'js-expression')
+    if (found.location.block === undefined && found.location.config === undefined) {
+      throw new ServersFault('unsupported', undefined, 'no-config')
     }
-    const target = id.trim()
+
+    const live = options.live()
+    if (newId !== id) {
+      if ((await declaredIds()).has(newId)) throw new ServersFault('duplicate-id', undefined, newId)
+      if (live.ids.includes(newId)) throw new ServersFault('duplicate-id', undefined, newId)
+    }
+    // The row being edited keeps its own name; every other live row must not use the new one.
+    for (const [rowId, name] of live.serverNames) {
+      if (rowId !== id && name === spec.serverName) {
+        throw new ServersFault('duplicate-name', undefined, spec.serverName)
+      }
+    }
+
+    const rewritten = rewriteMcpRow(found.text, id, {
+      id: newId,
+      block: renderServerBlock(spec),
+      configBody: configBodyLines(spec),
+    })
+    if (rewritten === undefined) throw new ServersFault('not-found', undefined, id)
+    await writeLayer(found.layer.path, rewritten)
+    return { id: newId, file: found.layer.kind, removed: [] }
+  }
+
+  async function remove(rawId: unknown): Promise<ServersMutation> {
+    const target = requireId(rawId, 'remove')
     for (const layer of layers()) {
       const text = await readLayer(layer.path)
       if (text === undefined) continue
@@ -303,8 +396,13 @@ export function createServersService(options: ServersServiceOptions): ServersSer
       }
       const action = typeof body === 'object' && body !== null ? (body as { action?: unknown }).action : undefined
       if (action === 'add') return answer(() => exclusive(() => add((body as { server?: unknown }).server)))
+      if (action === 'edit') {
+        const request = body as { id?: unknown; server?: unknown }
+        return answer(() => exclusive(() => edit(request.id, request.server)))
+      }
       if (action === 'remove') return answer(() => exclusive(() => remove((body as { id?: unknown }).id)))
-      return answer(() => { throw new ServersFault('bad-request', undefined, 'expected { "action": "add" | "remove" }') })
+      if (action === 'inspect') return answer(() => inspect((body as { id?: unknown }).id))
+      return answer(() => { throw new ServersFault('bad-request', undefined, 'expected { "action": "add" | "edit" | "remove" | "inspect" }') })
     },
   }
 }

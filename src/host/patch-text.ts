@@ -110,11 +110,16 @@ function topLevelItems(lines: readonly string[]): Span[] {
 
 /** The absolute column where an item's own mapping keys start. */
 function keyColumn(lines: readonly string[], item: Span): number {
-  const dash = ITEM_START.exec(lines[item.start])
-  if (dash === null) return 0
-  // `dash[0]` already spans the indentation, the dash, and one separator.
-  const rest = lines[item.start].slice(dash[0].length)
-  return dash[0].length + (/^[ \t]*/.exec(rest)?.[0].length ?? 0)
+  return keyColumnAt(lines, item, item.start)
+}
+
+/** Render one YAML scalar: plain when that is unambiguous, single-quoted otherwise. */
+export function yamlScalar(value: string): string {
+  const plain = /^[A-Za-z0-9_][A-Za-z0-9_./\\-]*$/.test(value)
+  const reserved = /^(?:true|false|null|yes|no|on|off|y|n|~)$/i.test(value)
+    || /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(value)
+  if (value !== '' && plain && !reserved) return value
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 /** One `name: value` line of an item's own mapping level. */
@@ -265,6 +270,145 @@ export function listMcpRows(text: string): PatchRow[] {
     }
   }
   return rows
+}
+
+/** One `mcp-client` row located in a patch file, with the pieces an in-place edit rewrites. */
+export interface McpRowLocation {
+  /** The marker block wrapping the row, when this panel wrote it. */
+  readonly block?: Span
+  /** The inner `insert` item carrying the row. */
+  readonly item: Span
+  /** The `config:` key line and the column its value is indented from. */
+  readonly config?: { readonly line: number; readonly column: number; readonly end: number }
+  /** The line carrying the item's `id:` key and the column that key starts at. */
+  readonly idAt?: { readonly line: number; readonly column: number }
+}
+
+/** The column where the key of one item line starts. */
+function keyColumnAt(lines: readonly string[], item: Span, index: number): number {
+  if (index !== item.start) return indentOf(lines[index])
+  const dash = ITEM_START.exec(lines[index])
+  if (dash === null) return 0
+  const rest = lines[index].slice(dash[0].length)
+  return dash[0].length + (/^[ \t]*/.exec(rest)?.[0].length ?? 0)
+}
+
+/**
+ * Locate one `mcp-client` row and the parts an edit replaces.
+ * @param text - the patch file's text.
+ * @param id - the Loader row id.
+ * @returns the location, or undefined when the file declares no such row.
+ */
+export function findMcpRow(text: string, id: string): McpRowLocation | undefined {
+  const lines = text.split(/\r?\n/)
+  const block = markerBlock(lines, id)
+  for (const item of topLevelItems(lines)) {
+    const value = insertValue(lines, item)
+    if (value === undefined) continue
+    for (const inner of insertItems(lines, value, item)) {
+      const keys = itemKeys(lines, inner)
+      if (keys.id !== id || keys.name !== MCP_CLIENT_MODULE) continue
+      let config: McpRowLocation['config']
+      let idAt: McpRowLocation['idAt']
+      for (let index = inner.start; index <= inner.end; index++) {
+        const entry = entryAt(lines, inner, index)
+        if (entry === undefined) continue
+        const column = keyColumnAt(lines, inner, index)
+        if (entry.name === 'id' && idAt === undefined) idAt = { line: index, column }
+        if (entry.name !== 'config' || config !== undefined) continue
+        // The config value is every following line indented deeper than its key.
+        let end = index
+        for (let scan = index + 1; scan <= inner.end; scan++) {
+          if (isBlank(lines[scan])) continue
+          if (indentOf(lines[scan]) <= column) break
+          end = scan
+        }
+        config = { line: index, column, end }
+      }
+      return {
+        ...block === undefined ? {} : { block },
+        item: inner,
+        ...config === undefined ? {} : { config },
+        ...idAt === undefined ? {} : { idAt },
+      }
+    }
+  }
+  return undefined
+}
+
+/** What an in-place row rewrite replaces. */
+export interface RowRewrite {
+  /** The row id after the rewrite; a different one renames the row and its override. */
+  readonly id: string
+  /** The marker block to substitute when the row is managed: already laid out, markers included. */
+  readonly block: string
+  /** The config body for a hand-written row, at zero base indent; nested lines keep their own indentation. */
+  readonly configBody: readonly string[]
+}
+
+/**
+ * Rewrite one server row in place, keeping every other line of the file.
+ *
+ * A managed row is replaced by a fresh canonical block at the same position. A
+ * hand-written row keeps its own lines: only its `config:` body is substituted
+ * (and its `id:` line when the server was renamed), so comments above and below
+ * the row survive. An enablement override for the old id is renamed with it.
+ *
+ * @param text - the patch file's text.
+ * @param id - the row id to rewrite.
+ * @param rewrite - the replacement block and config body.
+ * @returns the rewritten text, or undefined when the file declares no such row.
+ */
+export function rewriteMcpRow(text: string, id: string, rewrite: RowRewrite): string | undefined {
+  const lines = text.split(/\r?\n/)
+  const location = findMcpRow(text, id)
+  if (location === undefined) return undefined
+  const managed = location.block !== undefined
+  if (!managed && location.config === undefined) return undefined
+
+  const replacements: { readonly start: number; readonly end: number; readonly lines: readonly string[] }[] = []
+  if (managed) {
+    replacements.push({ start: location.block?.start ?? 0, end: location.block?.end ?? 0, lines: rewrite.block.split('\n') })
+  } else if (location.config !== undefined) {
+    const pad = ' '.repeat(location.config.column + 2)
+    replacements.push({
+      start: location.config.line + 1,
+      end: location.config.end,
+      lines: rewrite.configBody.map(line => (line === '' ? '' : `${pad}${line}`)),
+    })
+  }
+
+  const newId = rewrite.id
+  if (newId !== id) {
+    // The block carries its own new id; a bare override item outside it does not.
+    if (!managed && location.idAt !== undefined) {
+      const line = lines[location.idAt.line]
+      replacements.push({
+        start: location.idAt.line,
+        end: location.idAt.line,
+        lines: [`${line.slice(0, location.idAt.column)}id: ${yamlScalar(newId)}`],
+      })
+    }
+    for (const item of topLevelItems(lines)) {
+      if (insertValue(lines, item) !== undefined) continue
+      if (itemKeys(lines, item).id !== id) continue
+      for (let index = item.start; index <= item.end; index++) {
+        if (entryAt(lines, item, index)?.name !== 'id') continue
+        const line = lines[index]
+        replacements.push({
+          start: index,
+          end: index,
+          lines: [`${line.slice(0, keyColumnAt(lines, item, index))}id: ${yamlScalar(newId)}`],
+        })
+        break
+      }
+    }
+  }
+
+  for (const replacement of [...replacements].sort((left, right) => right.start - left.start)) {
+    lines.splice(replacement.start, replacement.end - replacement.start + 1, ...replacement.lines)
+  }
+  return lines.join(eolOf(text))
 }
 
 /**
