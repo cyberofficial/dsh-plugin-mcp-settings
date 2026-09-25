@@ -33,9 +33,14 @@ const PROFILE = `# profile patch
   disabled: false
 `
 
-/** One live-row reader with everything a conflict check or an edit prefill needs. */
-function liveRows({ ids = [], names = {}, configs = {} } = {}) {
-  return { ids, serverNames: new Map(Object.entries(names)), configs: new Map(Object.entries(configs)) }
+/** One live-row reader with everything a conflict check, an edit prefill, or a removal needs. */
+function liveRows({ ids = [], names = {}, configs = {}, failed = [] } = {}) {
+  return {
+    ids,
+    serverNames: new Map(Object.entries(names)),
+    configs: new Map(Object.entries(configs)),
+    failed: new Set(failed),
+  }
 }
 
 /** One service over an in-memory store. */
@@ -189,6 +194,56 @@ test('POST remove deletes the row and its override, then reports not-found', { s
   const again = await call(host, 'POST', { action: 'remove', id: 'mcp-ghidra' })
   assert.equal(again.status, 404)
   assert.equal(again.body.error.code, 'not-found')
+})
+
+test('POST remove switches a failed row off before cutting it', { skip }, async () => {
+  // A failed entry is not dropped when its row disappears, so the removal has to
+  // dispose it first: write the disabled override, wait for the fiber to leave
+  // `failed`, then cut. The store records both writes, in order.
+  const writes = []
+  const memory = memoryStore({ [FILES.profile]: PROFILE })
+  const phases = [{ failed: new Set(['mcp-ghidra']) }, { failed: new Set() }]
+  let read = 0
+  const store = {
+    async read(path) { return memory.store.read(path) },
+    async write(path, text) {
+      writes.push(text)
+      await memory.store.write(path, text)
+    },
+  }
+  const host = createServersService({
+    files: FILES,
+    store,
+    live: () => phases[Math.min(read++, phases.length - 1)],
+  })
+
+  const { status, body } = await call(host, 'POST', { action: 'remove', id: 'mcp-ghidra' })
+  assert.equal(status, 200)
+  assert.deepEqual(body.value.removed, ['row', 'override'])
+  assert.equal(writes.length, 2)
+  // First write: the row stays, switched off the way the switch writes it.
+  assert.ok(writes[0].includes('mcp-ghidra'))
+  assert.ok(writes[0].includes('  disabled: true'))
+  assert.ok(writes[0].includes('serverName: ghidra'))
+  // Second write: the row and the override are gone.
+  assert.equal(writes[1], '[]\n')
+  assert.equal(memory.files.get(FILES.profile), '[]\n')
+})
+
+test('POST remove cuts a healthy row in one write', async () => {
+  const writes = []
+  const memory = memoryStore({ [FILES.profile]: PROFILE })
+  const host = createServersService({
+    files: FILES,
+    store: {
+      async read(path) { return memory.store.read(path) },
+      async write(path, text) { writes.push(text); await memory.store.write(path, text) },
+    },
+    live: () => liveRows({ ids: ['mcp-ghidra'], names: { 'mcp-ghidra': 'ghidra' } }),
+  })
+  const { status } = await call(host, 'POST', { action: 'remove', id: 'mcp-ghidra' })
+  assert.equal(status, 200)
+  assert.equal(writes.length, 1)
 })
 
 test('POST remove edits the home layer when that is where the row lives', async () => {

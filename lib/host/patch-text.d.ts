@@ -110,6 +110,19 @@ export declare function removeMcpRow(text: string, id: string): Removal | undefi
  * @throws PatchShapeError when the existing file is not a top-level sequence.
  */
 export declare function appendServerBlock(text: string | undefined, block: string): string;
+/**
+ * Append the `disabled: true` override the panel's switch writes for one row.
+ *
+ * Removing a row whose entry failed leaves that entry behind in the Loader (it
+ * is no longer declared by any layer, so nothing ever disposes it). Disposing it
+ * first — by switching the row off exactly as the switch does — lets the
+ * following cut remove an entry that is merely off instead of failed.
+ *
+ * @param text - the patch file's text.
+ * @param id - the row id to switch off.
+ * @returns the rewritten text, ending in a line break.
+ */
+export declare function appendDisabledOverride(text: string, id: string): string;
 /** The marker comment that opens the block this panel owns for one row id. */
 export declare function blockBeginMarker(id: string): string;
 /** The marker comment that closes the block this panel owns for one row id. */

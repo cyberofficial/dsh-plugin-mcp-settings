@@ -133,6 +133,26 @@ function settling(entry: PluginInfo): boolean {
   return entry.fiberPhase === 'pending' || entry.fiberPhase === 'loading' || entry.fiberPhase === 'unloading'
 }
 
+/**
+ * Why a locked row stays locked, in words.
+ *
+ * `unaddressable` covers two very different situations: a row a bundle patch or
+ * overlay declares (which still carries a patch id), and an entry no layer
+ * declares any more — what a server leaves behind when it failed and its row was
+ * removed. The patch snapshot tells them apart: the leftovers are the ids it
+ * does not list.
+ *
+ * @param entry - the locked row.
+ * @param declared - row ids the patch files declare.
+ * @param t - section translator.
+ * @returns the sentence shown under the card.
+ */
+function lockHint(entry: PluginInfo, declared: ReadonlyMap<string, unknown>, t: Translate): string {
+  if (entry.readOnlyReason === 'management-required') return t('lockedHint')
+  const id = entry.patchId ?? entry.entryId.replace(/^include:/, '')
+  return declared.has(id) ? t('outsideHint') : t('staleHint')
+}
+
 type ViewState =
   | { readonly status: 'loading' }
   | { readonly status: 'error'; readonly message: string }
@@ -469,9 +489,7 @@ export function McpServersSection({
                     />
                   </div>
                 </div>
-                {locked && entry.readOnlyReason !== undefined ? (
-                  <p className={css.hint}>{entry.readOnlyReason}</p>
-                ) : null}
+                {locked ? <p className={css.hint}>{lockHint(entry, patchRows, t)}</p> : null}
                 {outside ? <p className={css.hint}>{t('outsideHint')}</p> : null}
               </li>
             )

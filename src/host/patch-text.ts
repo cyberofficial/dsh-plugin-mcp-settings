@@ -456,7 +456,9 @@ export function removeMcpRow(text: string, id: string): Removal | undefined {
   // A patch file that lost its last row still has to parse: an empty document
   // is not a sequence, so the empty patch array stands in for it.
   const empty = lines.every(line => isBlank(line) || isOuterComment(line))
-  return { text: empty ? `[]${eol}` : lines.join(eol), removed }
+  // Several override items can carry one id (the switch may have written more
+  // than one); the caller only needs to know which kinds were involved.
+  return { text: empty ? `[]${eol}` : lines.join(eol), removed: [...new Set(removed)] }
 }
 
 /** Delete one span, taking the blank line before it when that avoids a double gap. */
@@ -495,6 +497,27 @@ export function appendServerBlock(text: string | undefined, block: string): stri
     while (body.length > 0 && isBlank(body[body.length - 1])) body.pop()
     body.push('', ...block.split('\n'))
   }
+  if (body[body.length - 1] !== '') body.push('')
+  return body.join(eol)
+}
+
+/**
+ * Append the `disabled: true` override the panel's switch writes for one row.
+ *
+ * Removing a row whose entry failed leaves that entry behind in the Loader (it
+ * is no longer declared by any layer, so nothing ever disposes it). Disposing it
+ * first — by switching the row off exactly as the switch does — lets the
+ * following cut remove an entry that is merely off instead of failed.
+ *
+ * @param text - the patch file's text.
+ * @param id - the row id to switch off.
+ * @returns the rewritten text, ending in a line break.
+ */
+export function appendDisabledOverride(text: string, id: string): string {
+  const eol = eolOf(text)
+  const body = text.split(/\r?\n/)
+  while (body.length > 0 && isBlank(body[body.length - 1])) body.pop()
+  body.push(`- id: ${yamlScalar(id)}`, '  disabled: true')
   if (body[body.length - 1] !== '') body.push('')
   return body.join(eol)
 }

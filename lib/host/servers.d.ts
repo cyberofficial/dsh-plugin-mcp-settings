@@ -32,6 +32,13 @@ export interface LiveRows {
     readonly serverNames: ReadonlyMap<string, string>;
     /** Resolved `config` per live `mcp-client` row id, for the edit form. */
     readonly configs: ReadonlyMap<string, unknown>;
+    /**
+     * Row ids whose entry's fiber is currently failed.
+     *
+     * The Loader does not drop a failed child when its patch row disappears, so a
+     * removal has to dispose such an entry first; see {@link appendDisabledOverride}.
+     */
+    readonly failed: ReadonlySet<string>;
 }
 /** An expected refusal, carried to the browser as a structured error. */
 export declare class ServersFault extends Error {

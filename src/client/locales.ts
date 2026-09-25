@@ -32,6 +32,8 @@ export const en = {
   managedTag: 'From this panel',
   byHandTag: 'From your patch file',
   outsideHint: 'Defined outside your patch files (a bundle patch or --patch overlay) - edit it there.',
+  lockedHint: 'This row manages the plugin loader itself, so it cannot be changed from here.',
+  staleHint: 'No patch file declares this entry, so nothing can manage it from here: it is usually what a server leaves behind when it failed and its row was removed. Restarting the harness clears it, or add a server with this name and remove it again.',
   snapshotFailed: 'The patch files could not be read, so removing servers is unavailable.',
 
   // Add dialog
@@ -137,6 +139,8 @@ export const zh = {
   managedTag: '由本面板添加',
   byHandTag: '来自你的配置文件',
   outsideHint: '该条目不在你的配置文件层中（来自组合包补丁或 --patch 覆盖层），请在那里修改。',
+  lockedHint: '该记录管理插件加载器本身，无法在此修改。',
+  staleHint: '没有任何配置层声明该条目，因此这里无法管理它：通常是服务器启动失败、其记录又被删除后留下的残骸。重启 harness 即可清除，或添加同名服务器后再删除它。',
   snapshotFailed: '无法读取配置文件，因此暂时不能删除服务器。',
 
   add: '添加服务器',

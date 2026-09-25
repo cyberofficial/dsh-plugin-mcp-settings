@@ -25,6 +25,14 @@ import { createServersService, type LiveRows, type PatchFiles } from './host/ser
 /** File name of the profile patch layer this plugin writes. */
 const PATCH_FILENAME = 'cordis.patch.yml'
 
+/**
+ * Cordis's `FiberState.FAILED`, mirrored numerically the way the harness's own
+ * packages do: it is a cross-package const enum, so a plugin that cannot import
+ * it keeps the one value it needs (see `@deepseek-ai/dsh-host-plugin-inventory`,
+ * which mirrors the whole enum the same way).
+ */
+const FIBER_FAILED = 3
+
 /** One row of the live Loader tree, as this half reads it. */
 interface LoaderEntry {
   readonly options?: {
@@ -32,6 +40,7 @@ interface LoaderEntry {
     readonly name?: unknown
     readonly config?: unknown
   }
+  readonly fiber?: { readonly state?: unknown }
 }
 
 /** The `loader` service face used for duplicate detection. */
@@ -61,10 +70,12 @@ function liveRows(ctx: HostContext): LiveRows {
   const ids: string[] = []
   const serverNames = new Map<string, string>()
   const configs = new Map<string, unknown>()
+  const failed = new Set<string>()
   for (const entry of loader?.entries() ?? []) {
     const id = entry.options?.id
     if (typeof id !== 'string') continue
     ids.push(id)
+    if (entry.fiber?.state === FIBER_FAILED) failed.add(id)
     if (entry.options?.name !== MCP_CLIENT_MODULE) continue
     const config = entry.options.config
     // A disabled row keeps its entry (and so its config), which is what lets a
@@ -75,7 +86,7 @@ function liveRows(ctx: HostContext): LiveRows {
       : undefined
     if (typeof serverName === 'string') serverNames.set(id, serverName)
   }
-  return { ids, serverNames, configs }
+  return { ids, serverNames, configs, failed }
 }
 
 /**

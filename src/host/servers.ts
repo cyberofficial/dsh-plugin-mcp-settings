@@ -28,6 +28,7 @@ import {
   type SpecProblem,
 } from '../shared/spec.js'
 import {
+  appendDisabledOverride,
   appendServerBlock,
   blockBeginMarker,
   blockEndMarker,
@@ -64,7 +65,20 @@ export interface LiveRows {
   readonly serverNames: ReadonlyMap<string, string>
   /** Resolved `config` per live `mcp-client` row id, for the edit form. */
   readonly configs: ReadonlyMap<string, unknown>
+  /**
+   * Row ids whose entry's fiber is currently failed.
+   *
+   * The Loader does not drop a failed child when its patch row disappears, so a
+   * removal has to dispose such an entry first; see {@link appendDisabledOverride}.
+   */
+  readonly failed: ReadonlySet<string>
 }
+
+/** How long a removal waits for a switched-off entry to actually dispose. */
+const DISPOSE_BUDGET_MS = 8_000
+
+/** How often that wait re-reads the Loader. */
+const DISPOSE_POLL_MS = 200
 
 /** An expected refusal, carried to the browser as a structured error. */
 export class ServersFault extends Error {
@@ -341,13 +355,42 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     return { id: newId, file: found.layer.kind, removed: [] }
   }
 
+  /**
+   * Wait for a switched-off entry to leave the `failed` state.
+   *
+   * The wait is best-effort and bounded: a removal that cannot confirm disposal
+   * still proceeds, because leaving the row in place would be worse than a
+   * leftover the panel can explain.
+   */
+  async function waitForDisposal(id: string): Promise<boolean> {
+    const deadline = Date.now() + DISPOSE_BUDGET_MS
+    while (Date.now() < deadline) {
+      if (!options.live().failed.has(id)) return true
+      await delay(DISPOSE_POLL_MS)
+    }
+    return !options.live().failed.has(id)
+  }
+
   async function remove(rawId: unknown): Promise<ServersMutation> {
     const target = requireId(rawId, 'remove')
     for (const layer of layers()) {
       const text = await readLayer(layer.path)
       if (text === undefined) continue
-      const removal = removeMcpRow(text, target)
-      if (removal === undefined) continue
+      if (findMcpRow(text, target) === undefined && removeMcpRow(text, target) === undefined) continue
+
+      // A failed entry is not dropped when its row disappears, so switch it off
+      // first (which disposes its fiber) and only then cut the row.
+      if (options.live().failed.has(target)) {
+        await writeLayer(layer.path, appendDisabledOverride(text, target))
+        await waitForDisposal(target)
+      }
+
+      const current = await readLayer(layer.path) ?? text
+      const removal = removeMcpRow(current, target)
+      if (removal === undefined) {
+        /* v8 ignore next -- the row was just located in this same file */
+        continue
+      }
       await writeLayer(layer.path, removal.text)
       return { id: target, file: layer.kind, removed: removal.removed }
     }
@@ -410,4 +453,9 @@ export function createServersService(options: ServersServiceOptions): ServersSer
 /** Exact diagnostic of anything thrown. */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Wait one interval, for the disposal poll. */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => { setTimeout(resolve, ms) })
 }
