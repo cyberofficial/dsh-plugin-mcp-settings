@@ -207,6 +207,10 @@ The patch file *is* the interface: with `patchReload: "live"`, the harness's HMR
 { id: 'mcp-servers', order: 25, label: () => t('nav'), locale: 'settings.mcp', inject: injectedFace }
 ```
 
+### Removing a server that has failed
+
+The Loader does not drop an entry whose fiber **failed** when its patch row disappears, so a naive cut would leave a card nothing can manage (`unaddressable`, no Edit/Remove, and the id stays taken). Remove therefore disposes a broken server first — it writes the same `disabled: true` override the switch writes, waits for the fiber to leave `failed`, and only then cuts the row. Healthy rows are cut in one write. If a leftover does appear (a harness stopped mid-removal, say), the card explains itself and a restart clears it; re-adding a server with that name and removing it again also clears it, once the row is healthy.
+
 ### Design tokens
 
 All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
@@ -221,6 +225,7 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 | "Add server" or "Edit" reports a refusal, or the patch hint is missing | The host half is not loaded yet | Restart the harness after building: host-module changes are not hot-reloaded |
 | Edit opens but says the row carries `!!js` | The row's text holds an expression a form must not flatten | Edit that row in your patch file |
 | Edit opens but says the entry exposes no configuration | Nothing to prefill from (an unusual or failed compose) | Edit that row in your patch file |
+| A card is locked with a sentence about "remains of a server that failed" | A leftover entry no layer declares - the Loader kept a failed entry whose row was removed | Restart the harness, or add a server with that name and remove it again; current builds dispose the entry first and do not leave one |
 | Server added but no row appears | The profile has no patch watcher, or the entry failed to start | The page says so when there is no watcher; otherwise check the phase dot and `C:\Users\<you>\.dsh\logs\` |
 | `The patch file could not be edited` | The patch file is not a top-level YAML sequence | Repair the file (`[]` is valid and empty); nothing was written |
 | `A row named … already exists` | The id or `serverName` is taken | Pick another name, or remove the existing row first |
