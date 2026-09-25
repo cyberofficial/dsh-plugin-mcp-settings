@@ -4,6 +4,26 @@
 
 ---
 
+## Requirements
+
+| | |
+|---|---|
+| **DSH** | **0.1.7-rc.2 or later** — required (the release also written as 1.7-rc.2). Check yours with `dsh --version`. |
+| **Links into** | A dsh profile (`link:` dependency + `dsh.profile.bundles`), not a standalone app |
+| **Node** | Whatever the harness itself runs (22.x is what this is built and tested against) |
+
+The client half injects the `pluginManager` and `pluginInventory` **Remote** namespaces, which older releases do not mount. On an older DSH (0.1.5-rc.3 and similar) the section waits for a service that never appears, and the harness reports it at boot:
+
+```
+Failed to load plugins
+web boot: 1 entry did not activate
+dsh-plugin-mcp-settings: pending (waiting for service: remote.pluginManager)
+```
+
+That message means the DSH version is too old, not that the plugin is misconfigured — upgrade the harness (and its `@deepseek-ai/*` packages) and restart. Nothing in the profile needs changing. Older releases are not tested at all; 0.1.7-rc.2 is the release this plugin is built and verified against.
+
+---
+
 ## Features
 
 | Feature | Description |
@@ -22,6 +42,8 @@
 ---
 
 ## Installation
+
+Requires **DSH 0.1.7-rc.2 or later** (see [Requirements](#requirements) — older releases leave the section `pending (waiting for service: remote.pluginManager)`).
 
 The plugin is designed to be linked into a DSH profile as a **junction** (so edits are live):
 
@@ -222,6 +244,7 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| `pending (waiting for service: remote.pluginManager)` in the boot audit, or no "MCP Servers" nav entry | DSH older than 0.1.7-rc.2: it does not mount the Remote namespaces the client half injects | `dsh --version`, then upgrade the harness |
 | "Add server" or "Edit" reports a refusal, or the patch hint is missing | The host half is not loaded yet | Restart the harness after building: host-module changes are not hot-reloaded |
 | Edit opens but says the row carries `!!js` | The row's text holds an expression a form must not flatten | Edit that row in your patch file |
 | Edit opens but says the entry exposes no configuration | Nothing to prefill from (an unusual or failed compose) | Edit that row in your patch file |
