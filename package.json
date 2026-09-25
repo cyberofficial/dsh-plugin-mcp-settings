@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-mcp-settings",
-  "version": "0.1.0",
-  "description": "MCP Servers settings section: status, enable/disable, and connection retry for @deepseek-ai/dsh-mcp-client entries",
+  "version": "0.2.0",
+  "description": "MCP Servers settings section: status, enable/disable, retry, and add/remove of @deepseek-ai/dsh-mcp-client entries from the Settings UI",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -12,12 +12,20 @@
     },
     "./client": {
       "default": "./lib/client.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "scripts": {
-    "build": "node scripts/build-client.mjs"
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test \"test/*.test.mjs\""
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/react": "~18.3.1",
     "typescript": "^5.0.0"
   },

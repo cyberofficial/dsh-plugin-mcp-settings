@@ -1,12 +1,15 @@
 /**
  * Build script for the MCP Settings plugin.
  *
- * 1. Host half: plain `tsc` over `src/index.ts` → `lib/index.js` (ESM, no
- *    imports, so it builds standalone with zero dependency resolution).
- * 2. Client half: tsdown inside an isolated temp directory under the harness
- *    repo root (so `tsdown`/`@tsdown/css` resolve from the workspace install)
- *    — compiles `src/client` TSX directly with JSX transformed, and emits the
- *    closure-factory artifact `lib/client.js`:
+ * Both halves are staged into one temporary directory *inside the harness
+ * checkout* (`.mcp-settings-build`), because that is the only place from which
+ * `node:`, `@types/node`, and the client's externals resolve — this package
+ * deliberately installs no dependency of its own.
+ *
+ * 1. Host half: `tsc` over the staged copy of `src` → `lib/index.js` plus
+ *    `lib/host/*`, `lib/shared/*` (ESM, relative `.js` specifiers).
+ * 2. Client half: `tsdown` over the staged `src/client` + `src/shared` →
+ *    `lib/client.js`, a closure factory the browser module loader mounts:
  *    `window.__ModuleLoader__.load({ id, factory: (require) => { ... } })`.
  * 3. Post-process: splice the compiled stylesheet into the factory as a style
  *    injector (the tsdown CSS pipeline emits the class map inline but leaves
@@ -23,7 +26,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const pluginDir = resolve(here, '..')
 const repoRoot = 'D:\\github\\deepseek-harness'
 const libDir = resolve(pluginDir, 'lib')
-const tempDir = resolve(repoRoot, '.mcp-settings-client-build')
+const tempDir = resolve(repoRoot, '.mcp-settings-build')
 
 const WIN = process.platform === 'win32'
 const bin = (name) => resolve(repoRoot, 'node_modules/.bin', WIN ? `${name}.CMD` : name)
@@ -39,28 +42,38 @@ function run(cmd, args, cwd) {
   })
 }
 
-async function main() {
-  const outDirPlaceholder = JSON.stringify(libDir)
-  const configText = (await readFile(resolve(here, 'tsdown.client.json'), 'utf8'))
-    .replace('"LIB_OUT_DIR"', outDirPlaceholder)
-  const tsconfigText = await readFile(resolve(here, 'tsconfig.standalone.json'), 'utf8')
+/** Read a JSON template and substitute the real output directory. */
+async function template(name) {
+  return (await readFile(resolve(here, name), 'utf8')).replace('"LIB_OUT_DIR"', JSON.stringify(libDir))
+}
 
-  console.log('[1/4] cleaning lib/ and temp build dir')
+async function main() {
+  const hostTsconfig = await template('tsconfig.host.json')
+  const clientTsconfig = await readFile(resolve(here, 'tsconfig.standalone.json'), 'utf8')
+  const tsdownConfig = await template('tsdown.client.json')
+
+  console.log('[1/5] cleaning lib/ and temp build dir')
   await rm(libDir, { recursive: true, force: true })
   await rm(tempDir, { recursive: true, force: true })
   await mkdir(tempDir, { recursive: true })
 
-  console.log('[2/4] host half: tsc')
-  await run(bin('tsc'), ['-p', resolve(pluginDir, 'tsconfig.json')], pluginDir)
-
-  console.log('[3/4] client half: tsdown (isolated temp dir)')
-  await mkdir(resolve(tempDir, 'client'), { recursive: true })
+  console.log('[2/5] staging sources')
+  // Host: the whole of src/, so index.ts keeps its own relative layout.
+  await cp(resolve(pluginDir, 'src'), resolve(tempDir, 'host'), { recursive: true })
+  await writeFile(resolve(tempDir, 'host/tsconfig.json'), hostTsconfig)
+  // Client: the browser half plus the wire contract it shares with the host.
   await cp(resolve(pluginDir, 'src/client'), resolve(tempDir, 'client'), { recursive: true })
-  await writeFile(resolve(tempDir, 'tsdown.config.json'), configText)
-  await writeFile(resolve(tempDir, 'tsconfig.json'), tsconfigText)
+  await cp(resolve(pluginDir, 'src/shared'), resolve(tempDir, 'shared'), { recursive: true })
+  await writeFile(resolve(tempDir, 'tsconfig.json'), clientTsconfig)
+  await writeFile(resolve(tempDir, 'tsdown.config.json'), tsdownConfig)
+
+  console.log('[3/5] host half: tsc')
+  await run(bin('tsc'), ['-p', resolve(tempDir, 'host/tsconfig.json')], tempDir)
+
+  console.log('[4/5] client half: tsdown')
   await run(bin('tsdown'), ['--config', 'tsdown.config.json'], tempDir)
 
-  console.log('[4/4] splicing stylesheet into the client bundle')
+  console.log('[5/5] splicing stylesheet into the client bundle')
   const clientPath = resolve(libDir, 'client.js')
   const cssPath = resolve(libDir, 'style.css')
   if (!existsSync(clientPath)) throw new Error('client.js was not emitted')

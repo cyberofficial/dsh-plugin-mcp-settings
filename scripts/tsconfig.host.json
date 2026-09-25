@@ -3,8 +3,8 @@
     "target": "es2024",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "rootDir": "src",
-    "outDir": "lib",
+    "rootDir": ".",
+    "outDir": "LIB_OUT_DIR",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -13,6 +13,6 @@
     "esModuleInterop": true,
     "types": ["node"]
   },
-  "include": ["src/index.ts"],
-  "exclude": ["src/client"]
+  "include": ["index.ts"],
+  "exclude": ["client"]
 }

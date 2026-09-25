@@ -1,18 +1,103 @@
 /**
  * MCP Servers settings section — Host half.
  *
- * Empty `apply`, present only so the package holds a Loader row: the client
- * module system attaches this package's browser half to the row whose module
- * specifier is the bare package name. All work (server list, toggle, retry)
- * happens in `./client`, driven by the already-mounted `pluginInventory` and
- * `pluginManager` Remotes.
+ * The plugin exists so a Loader row (this package's `cordis.patch.yml`) mounts
+ * its browser half into Settings. The browser half reads, toggles, and restarts
+ * servers through the already-mounted `pluginManager` Remote; the two things
+ * that Remote cannot do — adding a server and removing one — need the patch file
+ * itself, so this half registers one exact route on the shared `/api` channel
+ * (`connection.fetch.register`, which applies the Host/Origin fence and browser
+ * authentication before the handler runs) and edits `cordis.patch.yml` there.
+ *
+ * The file is the whole interface: `patchReload: live` makes the HMR watcher
+ * recompose the profile the moment the patch changes, so an added row becomes a
+ * live `mcp-client` entry with no restart and no second mechanism.
  *
  * @module dsh-plugin-mcp-settings
  */
 
+import { join } from 'node:path'
+import { MCP_CLIENT_MODULE, SERVERS_PATH } from './shared/spec.js'
+import type { ConnectionFetchRoute, ConnectionService, HostContext, ProfileLocation } from './host/contract.js'
+import { createFsPatchStore } from './host/fs-store.js'
+import { createServersService, type LiveRows, type PatchFiles } from './host/servers.js'
+
+/** File name of the profile patch layer this plugin writes. */
+const PATCH_FILENAME = 'cordis.patch.yml'
+
+/** One row of the live Loader tree, as this half reads it. */
+interface LoaderEntry {
+  readonly options?: {
+    readonly id?: unknown
+    readonly name?: unknown
+    readonly config?: unknown
+  }
+}
+
+/** The `loader` service face used for duplicate detection. */
+interface LoaderService {
+  entries(): Iterable<LoaderEntry>
+}
+
 export const name = 'dsh-plugin-mcp-settings'
 
+/** No hard service deps: `connection` arrives via web-app layers. */
 export const inject = [] as const
 
-/** Host half is inert; see src/client for the browser half. */
-export function apply(): void {}
+/** Resolve the patch layers to edit, or undefined when no profile is running. */
+function locatePatchFiles(ctx: HostContext): PatchFiles | undefined {
+  const profile = ctx.get('profileContext') as ProfileLocation | null | undefined
+  const directory = profile?.dir ?? process.env.DSH_PROFILE_DIR
+  const home = profile?.home ?? process.env.DSH_HOME
+  const patchPath = profile?.patchPath
+    ?? (directory === undefined || directory === '' ? undefined : join(directory, PATCH_FILENAME))
+  if (patchPath === undefined || patchPath === '' || home === undefined || home === '') return undefined
+  return { profile: patchPath, home: join(home, PATCH_FILENAME) }
+}
+
+/** Read the live Loader rows that make a new row's id or name unsafe. */
+function liveRows(ctx: HostContext): LiveRows {
+  const loader = ctx.get('loader') as LoaderService | null | undefined
+  const ids: string[] = []
+  const serverNames: string[] = []
+  for (const entry of loader?.entries() ?? []) {
+    const id = entry.options?.id
+    if (typeof id === 'string') ids.push(id)
+    if (entry.options?.name !== MCP_CLIENT_MODULE) continue
+    const config = entry.options.config
+    const serverName = typeof config === 'object' && config !== null
+      ? (config as { serverName?: unknown }).serverName
+      : undefined
+    if (typeof serverName === 'string') serverNames.push(serverName)
+  }
+  return { ids, serverNames }
+}
+
+/**
+ * Mount the plugin.
+ * @param ctx - host plugin context.
+ */
+export function apply(ctx: HostContext): void {
+  // `connection` belongs to a later bundle layer, so wait for it through
+  // ctx.inject — which also supplies the Context that declares the service.
+  ctx.inject(['connection'], (connCtx) => {
+    const connection = connCtx.get('connection') as ConnectionService | null | undefined
+    if (connection === null || connection === undefined) return
+    const files = locatePatchFiles(connCtx)
+    const service = createServersService({
+      ...files === undefined ? {} : { files },
+      store: createFsPatchStore(),
+      live: () => liveRows(connCtx),
+      // The patch watcher is what turns a written row into a live entry.
+      hotReload: () => connCtx.get('hmr') !== undefined,
+    })
+    const route: ConnectionFetchRoute = {
+      path: SERVERS_PATH,
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: request => service.request(request),
+    }
+    connection.fetch.register(route)
+    ctx.logger.info(`mcp-settings: server management live at ${SERVERS_PATH}`)
+  })
+}
