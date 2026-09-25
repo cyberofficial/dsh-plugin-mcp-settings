@@ -58,3 +58,4 @@ export interface ProfileLocation {
   readonly patchPath?: string
   readonly home?: string
 }
+

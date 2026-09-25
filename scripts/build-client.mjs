@@ -16,7 +16,7 @@
  *    the sheet as an asset nobody loads).
  */
 
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
@@ -26,6 +26,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 const pluginDir = resolve(here, '..')
 const repoRoot = 'D:\\github\\deepseek-harness'
 const libDir = resolve(pluginDir, 'lib')
+/** Where a build lands before it is swapped in; a sibling keeps the rename on one volume. */
+const stagingDir = resolve(pluginDir, '.lib-next')
+/** Where the previous lib is moved aside during the swap, then deleted. */
+const previousDir = resolve(pluginDir, '.lib-prev')
 const tempDir = resolve(repoRoot, '.mcp-settings-build')
 
 const WIN = process.platform === 'win32'
@@ -42,22 +46,45 @@ function run(cmd, args, cwd) {
   })
 }
 
-/** Read a JSON template and substitute the real output directory. */
-async function template(name) {
-  return (await readFile(resolve(here, name), 'utf8')).replace('"LIB_OUT_DIR"', JSON.stringify(libDir))
+/** Read a JSON template and substitute a real output directory. */
+async function template(name, outDir) {
+  return (await readFile(resolve(here, name), 'utf8')).replace('"LIB_OUT_DIR"', JSON.stringify(outDir))
+}
+
+/**
+ * Replace `lib/` with the finished staging directory.
+ *
+ * A build never writes into the live directory: a harness that boots while one
+ * is running must never import a half-written host module (which is exactly the
+ * `failed to import` a mid-build restart used to produce). The swap is two
+ * renames — the only window where `lib/` is absent measures microseconds, and a
+ * failed swap puts the previous directory back.
+ */
+async function swapIn() {
+  await rm(previousDir, { recursive: true, force: true })
+  const hadLib = existsSync(libDir)
+  if (hadLib) await rename(libDir, previousDir)
+  try {
+    await rename(stagingDir, libDir)
+  } catch (error) {
+    if (hadLib) await rename(previousDir, libDir).catch(() => {})
+    throw error
+  }
+  await rm(previousDir, { recursive: true, force: true })
 }
 
 async function main() {
-  const hostTsconfig = await template('tsconfig.host.json')
+  const hostTsconfig = await template('tsconfig.host.json', stagingDir)
   const clientTsconfig = await readFile(resolve(here, 'tsconfig.standalone.json'), 'utf8')
-  const tsdownConfig = await template('tsdown.client.json')
+  const tsdownConfig = await template('tsdown.client.json', stagingDir)
 
-  console.log('[1/5] cleaning lib/ and temp build dir')
-  await rm(libDir, { recursive: true, force: true })
+  console.log('[1/6] cleaning staging directories')
+  await rm(stagingDir, { recursive: true, force: true })
+  await rm(previousDir, { recursive: true, force: true })
   await rm(tempDir, { recursive: true, force: true })
   await mkdir(tempDir, { recursive: true })
 
-  console.log('[2/5] staging sources')
+  console.log('[2/6] staging sources')
   // Host: the whole of src/, so index.ts keeps its own relative layout.
   await cp(resolve(pluginDir, 'src'), resolve(tempDir, 'host'), { recursive: true })
   await writeFile(resolve(tempDir, 'host/tsconfig.json'), hostTsconfig)
@@ -67,15 +94,15 @@ async function main() {
   await writeFile(resolve(tempDir, 'tsconfig.json'), clientTsconfig)
   await writeFile(resolve(tempDir, 'tsdown.config.json'), tsdownConfig)
 
-  console.log('[3/5] host half: tsc')
+  console.log('[3/6] host half: tsc')
   await run(bin('tsc'), ['-p', resolve(tempDir, 'host/tsconfig.json')], tempDir)
 
-  console.log('[4/5] client half: tsdown')
+  console.log('[4/6] client half: tsdown')
   await run(bin('tsdown'), ['--config', 'tsdown.config.json'], tempDir)
 
-  console.log('[5/5] splicing stylesheet into the client bundle')
-  const clientPath = resolve(libDir, 'client.js')
-  const cssPath = resolve(libDir, 'style.css')
+  console.log('[5/6] splicing stylesheet into the client bundle')
+  const clientPath = resolve(stagingDir, 'client.js')
+  const cssPath = resolve(stagingDir, 'style.css')
   if (!existsSync(clientPath)) throw new Error('client.js was not emitted')
   const bundle = await readFile(clientPath, 'utf8')
   const intro = '\t\tvar module = { exports: {} };\n\t\tvar exports = module.exports;'
@@ -95,11 +122,18 @@ async function main() {
   await writeFile(clientPath, bundle.replace(intro, injection))
   if (existsSync(cssPath)) await rm(cssPath)
 
+  console.log('[6/6] swapping the finished build into lib/')
+  await swapIn()
+
   await rm(tempDir, { recursive: true, force: true })
   console.log('MCP Settings plugin built: lib/index.js (host) + lib/client.js (browser)')
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  // A failed build leaves the live lib/ exactly as it was; only the staging
+  // directory is discarded, so the next run starts clean.
+  await rm(stagingDir, { recursive: true, force: true }).catch(() => {})
+  await rm(tempDir, { recursive: true, force: true }).catch(() => {})
   console.error('Build failed:', error)
   process.exit(1)
 })

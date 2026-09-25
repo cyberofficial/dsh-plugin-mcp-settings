@@ -143,7 +143,7 @@ Output:
 - `lib/index.js` (plus `lib/host/*`, `lib/shared/*`) — host half: reads and edits the profile patch, registers the `/api/plugins/mcp-settings/servers` route
 - `lib/client.js` — browser bundle (lazy-CJS factory, CSS inlined, `window.__ModuleLoader__.load` wrapper)
 
-Both halves are staged into `D:\github\deepseek-harness\.mcp-settings-build`, compiled there, then removed.
+Both halves are staged into `D:\github\deepseek-harness\.mcp-settings-build`, compiled there, then removed. The compiler writes into `.lib-next/`, never into `lib/`: the finished directory is swapped in with two renames at the very end, so a harness that boots *while* a build runs never imports a half-written host module (a failed build leaves `lib/` exactly as it was, and a failed swap puts the previous directory back).
 
 ### Test
 
@@ -228,7 +228,7 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 | "MCP Servers" nav missing | Plugin not loaded / client bundle not served | Restart the harness; hard-refresh the browser (Ctrl+Shift+R) |
 | Retry does nothing | Entry has `readOnlyReason: 'unaddressable'` (bundle patch origin) | Install the MCP server into your profile instead of the bundle |
 | Toggle doesn't persist | Profile patch not writable / junction broken | Verify `node_modules\dsh-plugin-mcp-settings` points to the source |
-| `failed to import` on startup | Corrupted `lib/index.js`, or a restart that landed mid-build (the build rewrites `lib/` in place) | Rebuild: `node scripts/build-client.mjs`, then restart once it finishes |
+| `failed to import` on startup | Either a build older than this README's atomic swap, or a genuinely broken `lib/index.js` | Rebuild: `node scripts/build-client.mjs` (it now compiles aside and swaps in, so a mid-build restart is safe), then restart |
 | `@tsdown/css not installed` | Missing build peer dep | `pnpm add -w @tsdown/css` at the checkout root |
 
 ### Logs
