@@ -1,0 +1,53 @@
+/** Dictionary for the MCP Servers settings section (en + zh). */
+
+export const en = {
+  nav: 'MCP Servers',
+  title: 'MCP Servers',
+  intro: 'Model Context Protocol servers connected to this harness. Toggle a server to enable or disable it; retry restarts its connection.',
+  empty: 'No MCP servers configured.',
+  emptyDesc: 'Add @deepseek-ai/dsh-mcp-client entries in the profile configuration file.',
+  loading: 'Loading servers...',
+  error: 'Failed to load servers',
+  retry: 'Retry',
+  toggling: 'Switching...',
+  toggled: 'Server switched',
+  retrying: 'Restarting...',
+  retried: 'Connection restarted',
+  actionFailed: 'Action failed',
+  statusPending: 'Pending',
+  statusLoading: 'Starting',
+  statusActive: 'Connected',
+  statusFailed: 'Failed',
+  statusUnloading: 'Stopping',
+  statusOff: 'Off',
+  transport: 'Transport',
+  module: 'Module',
+  configHint: 'Connection settings (command, URL, arguments) are edited in the configuration file.',
+} as const
+
+export const zh = {
+  nav: 'MCP 服务器',
+  title: 'MCP 服务器',
+  intro: '连接到本 harness 的 Model Context Protocol 服务器。开关用于启用或禁用服务器；重试会重新建立连接。',
+  empty: '未配置 MCP 服务器。',
+  emptyDesc: '请在配置文件中添加 @deepseek-ai/dsh-mcp-client 条目。',
+  loading: '正在加载服务器...',
+  error: '加载服务器失败',
+  retry: '重试',
+  toggling: '切换中...',
+  toggled: '服务器已切换',
+  retrying: '正在重启...',
+  retried: '连接已重启',
+  actionFailed: '操作失败',
+  statusPending: '等待中',
+  statusLoading: '启动中',
+  statusActive: '已连接',
+  statusFailed: '失败',
+  statusUnloading: '停止中',
+  statusOff: '已关闭',
+  transport: '传输方式',
+  module: '模块',
+  configHint: '连接设置（命令、URL、参数）请在配置文件中编辑。',
+} as const
+
+export type McpSettingsLocaleKey = keyof typeof en

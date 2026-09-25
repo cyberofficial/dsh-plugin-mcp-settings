@@ -1,0 +1,24 @@
+{
+  "entry": ["client/index.ts"],
+  "tsconfig": "tsconfig.json",
+  "outDir": "LIB_OUT_DIR",
+  "format": "cjs",
+  "platform": "browser",
+  "target": "es2024",
+  "dts": false,
+  "sourcemap": false,
+  "clean": false,
+  "deps": {
+    "neverBundle": [
+      "react",
+      "react/jsx-runtime",
+      "@deepseek-ai/dsh-client-ui-primitives"
+    ]
+  },
+  "outputOptions": {
+    "entryFileNames": "client.js",
+    "banner": "window.__ModuleLoader__.load({\n\tid: \"dsh-plugin-mcp-settings\",\n\tfactory: (require) => {",
+    "intro": "\tvar module = { exports: {} };\n\tvar exports = module.exports;",
+    "footer": "\treturn module.exports;\n} });"
+  }
+}
