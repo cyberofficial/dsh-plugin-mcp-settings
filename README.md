@@ -45,19 +45,50 @@ That message means the DSH version is too old, not that the plugin is misconfigu
 
 Requires **DSH 0.1.7-rc.2 or later** (see [Requirements](#requirements) — older releases leave the section `pending (waiting for service: remote.pluginManager)`).
 
-The plugin is designed to be linked into a DSH profile as a **junction** (so edits are live):
+The repository ships the built `lib/`, so no build step is needed to install. The package is not on npm; both ways below pull it from GitHub.
+
+- **Option 1, one command from GitHub**: no clone, no links made by hand (any OS)
+- **Option 2, a manual link to a local clone**, so edits to the source are live: a **junction** on Windows, a **symlink** on macOS
+
+### Option 1: one command from GitHub (any OS)
+
+```bash
+dsh plugin --profile web add github:cyberofficial/dsh-plugin-mcp-settings
+```
+
+If `dsh` is not on your PATH, the same through npx:
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web add github:cyberofficial/dsh-plugin-mcp-settings
+```
+
+Recent DSH releases append the bundle row themselves. Restart the harness; if "MCP Servers" does not appear, open your profile's `package.json`, make sure `dsh-plugin-mcp-settings` is listed in the `dsh.profile.bundles` array (shape below), and restart once more.
+
+### Option 2: manual link to a local clone
+
+Clone the repo somewhere outside the profile, then link it into the profile's `node_modules`.
+
+**Windows (junction):**
 
 ```bash
 # From your DSH profile directory (e.g. %USERPROFILE%\.dsh\profiles\web)
 mklink /J node_modules\dsh-plugin-mcp-settings D:\path\to\dsh-plugin-mcp-settings
 ```
 
-Then add it to your profile's `package.json`:
+**macOS (symlink):**
+
+```bash
+git clone https://github.com/cyberofficial/dsh-plugin-mcp-settings.git ~/dsh-plugin-mcp-settings
+cd ~/.dsh/profiles/web
+ln -s ~/dsh-plugin-mcp-settings node_modules/dsh-plugin-mcp-settings
+```
+
+Then add it to your profile's `package.json`. The `link:` path must be absolute (pnpm does not expand `~`): `link:D:/path/to/dsh-plugin-mcp-settings` on Windows, `link:/Users/you/dsh-plugin-mcp-settings` on macOS.
 
 ```json
 {
   "dependencies": {
-    "dsh-plugin-mcp-settings": "link:D:/path/to/dsh-plugin-mcp-settings"
+    "dsh-plugin-mcp-settings": "link:/absolute/path/to/dsh-plugin-mcp-settings"
   },
   "dsh": {
     "profile": {
@@ -152,6 +183,7 @@ Rows you wrote by hand (no markers) are listed and removable too: removal cuts e
 
 ### Prerequisites
 - The DSH checkout at `D:\github\deepseek-harness` (the build stages into it so `node:`, `@types/node`, and the client's externals resolve)
+- On another machine, macOS included, point `repoRoot` in `scripts/build-client.mjs` at your own checkout first: the path is hardcoded
 - `@tsdown/css` installed in the checkout: `pnpm add -w @tsdown/css`
 
 ### Build
@@ -249,19 +281,19 @@ All CSS uses `--dsw-alias-*` variables (no hard-coded colors):
 | Edit opens but says the row carries `!!js` | The row's text holds an expression a form must not flatten | Edit that row in your patch file |
 | Edit opens but says the entry exposes no configuration | Nothing to prefill from (an unusual or failed compose) | Edit that row in your patch file |
 | A card is locked with a sentence about "remains of a server that failed" | A leftover entry no layer declares - the Loader kept a failed entry whose row was removed | Restart the harness, or add a server with that name and remove it again; current builds dispose the entry first and do not leave one |
-| Server added but no row appears | The profile has no patch watcher, or the entry failed to start | The page says so when there is no watcher; otherwise check the phase dot and `C:\Users\<you>\.dsh\logs\` |
+| Server added but no row appears | The profile has no patch watcher, or the entry failed to start | The page says so when there is no watcher; otherwise check the phase dot and the logs under `~/.dsh/logs/` (`C:\Users\<you>\.dsh\logs\` on Windows) |
 | `The patch file could not be edited` | The patch file is not a top-level YAML sequence | Repair the file (`[]` is valid and empty); nothing was written |
 | `A row named … already exists` | The id or `serverName` is taken | Pick another name, or remove the existing row first |
 | Remove is unavailable on a row | The row comes from a bundle patch or `--patch` overlay | Edit that patch instead; only your profile and home layers are editable |
-| "MCP Servers" nav missing | Plugin not loaded / client bundle not served | Restart the harness; hard-refresh the browser (Ctrl+Shift+R) |
+| "MCP Servers" nav missing | Plugin not loaded / client bundle not served | Restart the harness; hard-refresh the browser (Ctrl+Shift+R, Cmd+Shift+R on macOS) |
 | Retry does nothing | Entry has `readOnlyReason: 'unaddressable'` (bundle patch origin) | Install the MCP server into your profile instead of the bundle |
-| Toggle doesn't persist | Profile patch not writable / junction broken | Verify `node_modules\dsh-plugin-mcp-settings` points to the source |
+| Toggle doesn't persist | Profile patch not writable / junction or symlink broken | Verify `node_modules\dsh-plugin-mcp-settings` points to the source |
 | `failed to import` on startup | Either a build older than this README's atomic swap, or a genuinely broken `lib/index.js` | Rebuild: `node scripts/build-client.mjs` (it now compiles aside and swaps in, so a mid-build restart is safe), then restart |
 | `@tsdown/css not installed` | Missing build peer dep | `pnpm add -w @tsdown/css` at the checkout root |
 
 ### Logs
-- Harness startup and warnings: `C:\Users\<you>\.dsh\logs\startup-*.log`
-- Profile: `C:\Users\<you>\.dsh\profiles\web\` (`cordis.yml`, `cordis.patch.yml`, `node_modules` junctions)
+- Harness startup and warnings: `~/.dsh/logs/startup-*.log` on macOS, `C:\Users\<you>\.dsh\logs\startup-*.log` on Windows
+- Profile: `~/.dsh/profiles/web/` on macOS, `C:\Users\<you>\.dsh\profiles\web\` on Windows (`cordis.yml`, `cordis.patch.yml`, `node_modules` junctions or symlinks)
 
 ---
 
