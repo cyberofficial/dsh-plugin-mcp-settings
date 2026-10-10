@@ -38,7 +38,7 @@ export interface McpServerDraft {
     readonly command: string;
     /** One argument per line. */
     readonly argsText: string;
-    /** One `KEY=VALUE` per line; blank and `#` lines are ignored. */
+    /** One `KEY=VALUE` per line (YAML-style `KEY: value` accepted); blank and `#` lines are ignored. */
     readonly envText: string;
     readonly cwd: string;
     readonly url: string;
@@ -92,6 +92,9 @@ export type SpecResult = {
 export declare function rowIdFor(serverName: string): string;
 /**
  * Parse `KEY=VALUE` lines (environment) or `Name: value` lines (headers).
+ *
+ * Environment lines also accept the YAML `KEY: value` shape, and one matching
+ * pair of surrounding quotes on a value is dropped (see {@link unquote}).
  * @param text - the textarea value.
  * @param separator - the character splitting each line.
  * @param kind - which pattern the key must satisfy.

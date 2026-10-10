@@ -187,7 +187,7 @@ export function ServerDialog({
                   onChange={(event) => { update({ command: event.target.value }) }}
                 />
               </Field>
-              <Field label={t('fieldArgs')} error={errors['args']}>
+              <Field label={t('fieldArgs')} hint={t('fieldArgsHint')} error={errors['args']}>
                 <textarea
                   className={css.textarea}
                   value={draft.argsText}

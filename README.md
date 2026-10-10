@@ -111,7 +111,7 @@ Restart the harness. The plugin composes via its own `cordis.patch.yml` (single 
 2. **Add server** opens a dialog:
    - **Name** — the `serverName` namespace; tools reach the model as `mcp__<name>__<tool>`.
    - **Transport** — `stdio` or `HTTP`.
-   - *stdio*: **Command**, **Arguments** (one per line), **Environment** (`KEY=VALUE` per line), **Working directory**.
+   - *stdio*: **Command**, **Arguments** (one per line; a matching pair of quotes around a pasted line is dropped), **Environment** (`KEY=VALUE` per line; a YAML-style `KEY: value` block also parses, quotes included), **Working directory**.
    - *HTTP*: **URL**, **Headers** (`Name: value` per line).
    - **Tool call timeout (ms)** — empty uses the `mcp-client` default (60000).
    - **Fail activation when the first connection fails** — maps to `failOnStartupError`.
@@ -151,6 +151,8 @@ Arguments:  -y
 Environment:
             EXA_API_KEY=your_api_key
 ```
+
+The environment box also accepts a block pasted straight out of a YAML config — `EXA_API_KEY: your_api_key`, values in quotes (`'C:\Program Files\...'`), and `KEY=` / `KEY:` for an empty value all parse. A line that fits no key form (a wrapped bare path, for instance) still reports `KEY=VALUE` and points at its line.
 
 Both land in the patch file as `config.headers` / `config.env`, which `mcp-client` forwards to the MCP transport (`requestInit.headers` for HTTP, the child process environment for stdio).
 

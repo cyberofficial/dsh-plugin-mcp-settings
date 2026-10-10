@@ -167,7 +167,42 @@ test('POST add validates the draft and reports the offending field', async () =>
   assert.equal(memory.files.get(FILES.profile), before)
 })
 
-test('POST add refuses an id or a server name that already exists', async () => {
+test('POST add accepts a pasted YAML env block and quoted arguments', { skip }, async () => {
+  const { host, memory } = service()
+  const { status } = await call(host, 'POST', {
+    action: 'add',
+    server: stdioDraft({
+      argsText: "'D:\\github\\rea\\scripts\\rea.mjs'\nmcp",
+      envText: "REA_ANALYSIS_PROVIDER: ghidra\nGHIDRA_INSTALL_DIR: 'C:\\ProgramData\\chocolatey\\lib\\ghidra\\tools\\ghidra_12.1.2_PUBLIC'\nJAVA_HOME: \"C:\\Program Files\\Eclipse Adoptium\\jdk-25.0.1.8-hotspot\"\nMIXED=a: b\n# a comment\nEMPTY=",
+    }),
+  })
+  assert.equal(status, 200)
+  const [row] = insertedConfigs(parsePatch(yaml, memory.files.get(FILES.profile))).filter(entry => entry.id === 'mcp-exa')
+  assert.deepEqual(row.config.args, ['D:\\github\\rea\\scripts\\rea.mjs', 'mcp'])
+  assert.deepEqual(row.config.env, {
+    REA_ANALYSIS_PROVIDER: 'ghidra',
+    GHIDRA_INSTALL_DIR: 'C:\\ProgramData\\chocolatey\\lib\\ghidra\\tools\\ghidra_12.1.2_PUBLIC',
+    JAVA_HOME: 'C:\\Program Files\\Eclipse Adoptium\\jdk-25.0.1.8-hotspot',
+    MIXED: 'a: b',
+    EMPTY: '',
+  })
+})
+
+test('POST add still refuses env lines that fit neither key form', async () => {
+  const { host } = service()
+  const { status, body } = await call(host, 'POST', {
+    action: 'add',
+    server: stdioDraft({ envText: 'C:\\ProgramData\\a wrapped value line\nBARE' }),
+  })
+  assert.equal(status, 400)
+  assert.equal(body.error.code, 'invalid-spec')
+  assert.deepEqual(body.error.problems.map(problem => [problem.field, problem.reason]), [
+    ['env', 'env-line'],
+    ['env', 'env-line'],
+  ])
+})
+
+test('POST add refuses conflicts, an id or a server name that already exists', async () => {
   const existing = service()
   const duplicate = await call(existing.host, 'POST', { action: 'add', server: stdioDraft({ serverName: 'ghidra' }) })
   assert.equal(duplicate.status, 409)
