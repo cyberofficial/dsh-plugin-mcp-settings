@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-mcp-settings",
-  "version": "0.2.0",
-  "description": "MCP Servers settings section: status, enable/disable, retry, and add/remove of @deepseek-ai/dsh-mcp-client entries from the Settings UI",
+  "version": "0.3.0",
+  "description": "MCP Servers settings section: status, enable/disable, retry, and add/remove of @deepseek-ai/dsh-mcp-client entries from the Settings UI, including legacy SSE servers through the bundled stdio bridge",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -17,6 +17,7 @@
   },
   "files": [
     "lib",
+    "bridge",
     "cordis.patch.yml",
     "README.md"
   ],

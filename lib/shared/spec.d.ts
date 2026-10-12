@@ -20,8 +20,20 @@ export declare const ROW_ID_PREFIX = "mcp-";
 export declare const SERVER_NAME_PATTERN: RegExp;
 /** Highest per-call timeout worth storing (2^31 - 1 ms, Node's timer ceiling). */
 export declare const MAX_TOOL_CALL_TIMEOUT_MS = 2147483647;
-/** Which transport one server uses. */
-export type McpTransport = 'stdio' | 'streamable-http';
+/** Which transport one server uses; an `sse` server is stored as a bridged stdio row. */
+export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
+/**
+ * How the host half launches the bundled SSE bridge for `sse` servers: the
+ * Node executable running this harness and the bridge script shipped beside
+ * `lib/`. Shared because `draftOfConfig` needs the same signature to tell an
+ * SSE row apart from a hand-written stdio one.
+ */
+export interface SseBridgeSpec {
+    /** Executable that spawns the bridge (the harness's own Node). */
+    readonly command: string;
+    /** Absolute path of `bridge/sse-bridge.mjs` inside this package. */
+    readonly script: string;
+}
 /** The patch file a row lives in: the profile's own layer, or the home layer. */
 export type PatchFileKind = 'profile' | 'home';
 /** One `KEY=VALUE` (environment) or `Name: value` (header) textarea line. */
@@ -68,8 +80,21 @@ export interface McpStreamableHttpSpec {
     readonly toolCallTimeoutMs?: number;
     readonly failOnStartupError: boolean;
 }
+/**
+ * A validated legacy SSE server. `@deepseek-ai/dsh-mcp-client` has no SSE
+ * transport, so this is rendered as a stdio row whose command runs the bridge
+ * this package ships; the form keeps presenting it as SSE.
+ */
+export interface McpSseSpec {
+    readonly transport: 'sse';
+    readonly serverName: string;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly toolCallTimeoutMs?: number;
+    readonly failOnStartupError: boolean;
+}
 /** One validated server configuration. */
-export type McpServerSpec = McpStdioSpec | McpStreamableHttpSpec;
+export type McpServerSpec = McpStdioSpec | McpStreamableHttpSpec | McpSseSpec;
 /** The draft field a problem belongs to. */
 export type SpecField = 'serverName' | 'transport' | 'command' | 'args' | 'env' | 'cwd' | 'url' | 'headers' | 'toolCallTimeoutMs';
 /** Why a draft was refused. */
@@ -146,6 +171,8 @@ export interface PatchRowInfo {
     readonly file: PatchFileKind;
     /** True when the row sits between this panel's own marker comments. */
     readonly managed: boolean;
+    /** Which transport the row's live config uses; absent while no live entry exposes one. */
+    readonly transport?: McpTransport;
 }
 /** What the browser reads before rendering the section's management affordances. */
 export interface ServersSnapshot {
@@ -212,6 +239,23 @@ export type ServersRequest = {
 /** An empty draft, for the Add dialog's initial state. */
 export declare function emptyDraft(): McpServerDraft;
 /**
+ * The SSE facts of one live `mcp-client` config, when it is a bridged SSE row.
+ *
+ * Identity is the bridge script as the first argument; the command is not
+ * compared, so a row written under an older Node still reads as SSE.
+ *
+ * @param config - the entry's resolved config, of unknown shape.
+ * @param bridge - the bridge the host would launch; without it nothing matches.
+ * @returns the URL and headers, or undefined when the config is not a bridged
+ *   SSE row this form can present.
+ */
+export declare function sseOfStdioConfig(config: Record<string, unknown>, bridge?: SseBridgeSpec): {
+    readonly url: string;
+    readonly headers: Record<string, string>;
+} | undefined;
+/** Which transport one live `mcp-client` config effectively uses. */
+export declare function transportOfConfig(config: unknown, bridge?: SseBridgeSpec): McpTransport | undefined;
+/**
  * Turn one resolved `mcp-client` config back into the dialog's flat draft.
  *
  * The host reads this from the live Loader entry rather than from the patch
@@ -223,5 +267,5 @@ export declare function emptyDraft(): McpServerDraft;
  * @param config - the entry's resolved `config`, of unknown shape.
  * @returns the draft, or undefined when the shape is not one this form can edit.
  */
-export declare function draftOfConfig(config: unknown): McpServerDraft | undefined;
+export declare function draftOfConfig(config: unknown, bridge?: SseBridgeSpec): McpServerDraft | undefined;
 //# sourceMappingURL=spec.d.ts.map

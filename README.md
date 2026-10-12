@@ -29,10 +29,11 @@ That message means the DSH version is too old, not that the plugin is misconfigu
 | Feature | Description |
 |---------|-------------|
 | **Settings nav entry** | "MCP Servers" appears in the left sidebar (order 25, after *Agent presets*) |
-| **Add a server** | A dialog writes one canonical `insert` row into your profile patch: stdio (`command`, `args`, `env`, `cwd`) or Streamable HTTP (`url`, **custom headers**) |
+| **Add a server** | A dialog writes one canonical `insert` row into your profile patch: stdio (`command`, `args`, `env`, `cwd`), Streamable HTTP (`url`, **custom headers**), or legacy SSE (`url` and headers, stored as a stdio row running the bundled bridge) |
 | **Edit a server** | **Edit** opens the same dialog on the running entry's *current* values (read from the live Loader, not from the file) and writes them back in place — including renaming the server and switching its transport |
 | **Remove a server** | Per-row **Remove** with confirmation; deletes the row *and* the enable/disable override the switch wrote, leaving every other line — and every comment — of your patch file untouched |
 | **Live status** | Each card shows a phase dot (pending / loading / active / failed / unloading / off) |
+| **Transport badge** | Each card shows which transport the server uses — stdio, HTTP, or SSE |
 | **Enable / Disable** | Toggle persists to the profile patch and reloads the entry live |
 | **Retry connection** | Disables then re-enables the server, re-establishing the MCP handshake |
 | **API keys** | Headers (`x-api-key: …`, `Authorization: Bearer …`) and env vars (`EXA_API_KEY=…`) are first-class fields; the host hands them straight to `mcp-client` |
@@ -110,7 +111,7 @@ Restart the harness. The plugin composes via its own `cordis.patch.yml` (single 
 1. Open **Settings → MCP Servers**.
 2. **Add server** opens a dialog:
    - **Name** — the `serverName` namespace; tools reach the model as `mcp__<name>__<tool>`.
-   - **Transport** — `stdio` or `HTTP`.
+   - **Transport** — `stdio`, `HTTP`, or `SSE` (legacy HTTP+SSE). An SSE row is stored as the stdio row that runs this plugin's bundled `bridge/sse-bridge.mjs`, so `dsh-mcp-client` needs no SSE support.
    - *stdio*: **Command**, **Arguments** (one per line; a matching pair of quotes around a pasted line is dropped), **Environment** (`KEY=VALUE` per line; a YAML-style `KEY: value` block also parses, quotes included), **Working directory**.
    - *HTTP*: **URL**, **Headers** (`Name: value` per line).
    - **Tool call timeout (ms)** — empty uses the `mcp-client` default (60000).
@@ -152,6 +153,14 @@ Environment:
             EXA_API_KEY=your_api_key
 ```
 
+Local SSE server (an older MCP plugin that only speaks the deprecated HTTP+SSE transport — x64dbg's is the example this was built against):
+
+```
+Transport:  SSE
+URL:        http://127.0.0.1:50300/sse
+Headers:    x-api-key: YOUR_KEY   (optional)
+```
+
 The environment box also accepts a block pasted straight out of a YAML config — `EXA_API_KEY: your_api_key`, values in quotes (`'C:\Program Files\...'`), and `KEY=` / `KEY:` for an empty value all parse. A line that fits no key form (a wrapped bare path, for instance) still reports `KEY=VALUE` and points at its line.
 
 Both land in the patch file as `config.headers` / `config.env`, which `mcp-client` forwards to the MCP transport (`requestInit.headers` for HTTP, the child process environment for stdio).
@@ -175,6 +184,24 @@ Added rows are wrapped in marker comments so the panel can rewrite or delete the
         headers:
           x-api-key: YOUR_EXA_API_KEY
 # <<< dsh-plugin-mcp-settings: mcp-exa
+```
+
+An SSE server is stored as the stdio row that runs the bundled bridge; the panel still presents it as SSE on the card and in the edit form:
+
+```yaml
+# >>> dsh-plugin-mcp-settings: mcp-x64dbg
+# Added by the MCP Servers settings panel. Edit or delete this whole block there.
+- insert:
+    - id: mcp-x64dbg
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: x64dbg
+        transport: stdio
+        command: 'C:\Program Files\nodejs\node.exe'
+        args:
+          - 'D:\github\dsh-plugins\dsh-plugin-mcp-settings\bridge\sse-bridge.mjs'
+          - 'http://127.0.0.1:50300/sse'
+# <<< dsh-plugin-mcp-settings: mcp-x64dbg
 ```
 
 Rows you wrote by hand (no markers) are listed and removable too: removal cuts exactly the `insert` inner item whose `id` and `name` match, plus any `- id: <row>` override item. Comments elsewhere are never rewritten.
@@ -234,6 +261,7 @@ node D:\github\deepseek-harness\apps\cli\lib\bin.js --profile mcp-probe --dump-c
 | `src/client/ServerDialog.tsx` | The add/edit form, per-transport fields, inline validation, blocked-row states |
 | `src/client/messages.ts` | Validation problems, blocked reasons, and host refusals turned into localized sentences |
 | `src/client/locales.ts` | `en`/`zh` dictionaries plus `McpSettingsLocaleKey` |
+| `bridge/sse-bridge.mjs` | Zero-dependency stdio<->SSE bridge, spawned for `sse`-transport rows |
 | `cordis.patch.yml` | Composition row: `- insert: - id: plugin-mcp-settings, name: dsh-plugin-mcp-settings` |
 
 ---
@@ -244,6 +272,10 @@ node D:\github\deepseek-harness\apps\cli\lib\bin.js --profile mcp-probe --dump-c
 
 - **The mounted `pluginManager` Remote** already handles the list, the enable/disable switch, and the retry action: `listPlugins` (with each row's patch addressability) and `setPluginEnabled`.
 - **Nothing in the harness exposes "write a Loader row"**, so adding, editing, and removing go through this plugin's own host half: one exact route on the shared `/api` channel (`connection.fetch.register`), which already applies the Host/Origin fence and browser authentication. Typert remotes have a static namespace mount list that external plugins cannot extend, which is why the plugin uses a fetch route rather than a remote namespace.
+
+### The SSE transport
+
+`dsh-mcp-client` speaks stdio and Streamable HTTP only. An SSE server is therefore stored as the stdio row that launches `bridge/sse-bridge.mjs` with the SSE URL (and `-H 'Name: value'` header pairs). The bridge holds the SSE stream open, POSTs every JSON-RPC line to the `endpoint` the stream announces, and forwards only default (unnamed) `data:` events back over stdout, so nothing but JSON-RPC reaches the stdio channel. When the stream dies the bridge exits non-zero and the client's reconnect policy respawns it with a fresh session. The host resolves the script path from its own `lib/` location, so a junction or symlink install works unchanged.
 
 ### Editing someone else's YAML
 

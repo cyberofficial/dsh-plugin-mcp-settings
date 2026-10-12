@@ -16,7 +16,8 @@
  * @module dsh-plugin-mcp-settings
  */
 
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { MCP_CLIENT_MODULE, SERVERS_PATH } from './shared/spec.js'
 import type { ConnectionFetchRoute, ConnectionService, HostContext, ProfileLocation } from './host/contract.js'
 import { createFsPatchStore } from './host/fs-store.js'
@@ -106,6 +107,11 @@ export function apply(ctx: HostContext): void {
       live: () => liveRows(connCtx),
       // The patch watcher is what turns a written row into a live entry.
       hotReload: () => connCtx.get('hmr') !== undefined,
+      // An sse server mounts as this bridge: lib/index.js -> package root -> bridge/.
+      bridge: {
+        command: process.execPath,
+        script: resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bridge', 'sse-bridge.mjs'),
+      },
     })
     const route: ConnectionFetchRoute = {
       path: SERVERS_PATH,

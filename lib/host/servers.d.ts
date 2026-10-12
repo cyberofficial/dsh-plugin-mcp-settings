@@ -9,7 +9,7 @@
  *
  * @module dsh-plugin-mcp-settings/host/servers
  */
-import { type McpServerSpec, type ServerErrorCode, type SpecProblem } from '../shared/spec.js';
+import { type McpServerSpec, type ServerErrorCode, type SpecProblem, type SseBridgeSpec } from '../shared/spec.js';
 /** Absolute paths of the two patch layers this panel may rewrite. */
 export interface PatchFiles {
     /** The profile's own layer, where new servers are written. */
@@ -58,6 +58,8 @@ export interface ServersServiceOptions {
     readonly live: () => LiveRows;
     /** Whether the running profile applies a patch write without a restart. */
     readonly hotReload?: () => boolean;
+    /** The bundled SSE bridge, launched for `sse`-transport rows. */
+    readonly bridge?: SseBridgeSpec;
 }
 /** What the host half exposes to the browser over one exact fetch route. */
 export interface ServersService {
@@ -65,9 +67,9 @@ export interface ServersService {
     request(request: Request): Promise<Response>;
 }
 /** The `config:` body of one server at zero base indent, for an in-place row rewrite. */
-export declare function configBodyLines(spec: McpServerSpec): string[];
+export declare function configBodyLines(spec: McpServerSpec, bridge?: SseBridgeSpec): string[];
 /** The canonical, marker-delimited `insert` block for one server. */
-export declare function renderServerBlock(spec: McpServerSpec): string;
+export declare function renderServerBlock(spec: McpServerSpec, bridge?: SseBridgeSpec): string;
 /**
  * Build the host half's manager over one profile.
  * @param options - patch layers, store, and the live-row reader.

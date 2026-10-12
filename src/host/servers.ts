@@ -15,6 +15,7 @@ import {
   emptyDraft,
   MCP_CLIENT_MODULE,
   rowIdFor,
+  transportOfConfig,
   validateDraft,
   type EditableServer,
   type McpServerSpec,
@@ -26,6 +27,7 @@ import {
   type ServersResponse,
   type ServersSnapshot,
   type SpecProblem,
+  type SseBridgeSpec,
 } from '../shared/spec.js'
 import {
   appendDisabledOverride,
@@ -116,6 +118,8 @@ export interface ServersServiceOptions {
   readonly live: () => LiveRows
   /** Whether the running profile applies a patch write without a restart. */
   readonly hotReload?: () => boolean
+  /** The bundled SSE bridge, launched for `sse`-transport rows. */
+  readonly bridge?: SseBridgeSpec
 }
 
 /** What the host half exposes to the browser over one exact fetch route. */
@@ -129,14 +133,18 @@ function entry(indent: number, key: string, value: string): string {
   return `${' '.repeat(indent)}${key}: ${yamlScalar(value)}`
 }
 
-/** The `config:` mapping of one server, as lines indented from the given base. */
-function configLines(spec: McpServerSpec, indent: number): string[] {
+/**
+ * The `config:` mapping of one server, as lines indented from the given base.
+ *
+ * An `sse` spec renders as the stdio row that launches the bundled bridge:
+ * `mcp-client` has no SSE transport, so the row it mounts runs
+ * `node sse-bridge.mjs <url> [-H 'Name: value']...`.
+ */
+function configLines(spec: McpServerSpec, indent: number, bridge: SseBridgeSpec | undefined): string[] {
   const pad = ' '.repeat(indent)
-  const lines: string[] = [
-    entry(indent, 'serverName', spec.serverName),
-    entry(indent, 'transport', spec.transport),
-  ]
+  const lines: string[] = [entry(indent, 'serverName', spec.serverName)]
   if (spec.transport === 'stdio') {
+    lines.push(entry(indent, 'transport', 'stdio'))
     lines.push(entry(indent, 'command', spec.command))
     if (spec.args.length > 0) {
       lines.push(`${pad}args:`)
@@ -148,12 +156,27 @@ function configLines(spec: McpServerSpec, indent: number): string[] {
       for (const [key, value] of env) lines.push(entry(indent + 2, key, value))
     }
     if (spec.cwd !== '') lines.push(entry(indent, 'cwd', spec.cwd))
-  } else {
+  } else if (spec.transport === 'streamable-http') {
+    lines.push(entry(indent, 'transport', 'streamable-http'))
     lines.push(entry(indent, 'url', spec.url))
     const headers = Object.entries(spec.headers)
     if (headers.length > 0) {
       lines.push(`${pad}headers:`)
       for (const [key, value] of headers) lines.push(entry(indent + 2, key, value))
+    }
+  } else {
+    if (bridge === undefined) {
+      throw new Error('mcp-settings: the sse transport needs the bundled bridge location')
+    }
+    lines.push(entry(indent, 'transport', 'stdio'))
+    lines.push(entry(indent, 'command', bridge.command))
+    lines.push(`${pad}args:`)
+    const item = ' '.repeat(indent + 2)
+    lines.push(`${item}- ${yamlScalar(bridge.script)}`)
+    lines.push(`${item}- ${yamlScalar(spec.url)}`)
+    for (const [key, value] of Object.entries(spec.headers)) {
+      lines.push(`${item}- ${yamlScalar('-H')}`)
+      lines.push(`${item}- ${yamlScalar(`${key}: ${value}`)}`)
     }
   }
   const timeout = spec.toolCallTimeoutMs
@@ -163,12 +186,12 @@ function configLines(spec: McpServerSpec, indent: number): string[] {
 }
 
 /** The `config:` body of one server at zero base indent, for an in-place row rewrite. */
-export function configBodyLines(spec: McpServerSpec): string[] {
-  return configLines(spec, 0)
+export function configBodyLines(spec: McpServerSpec, bridge?: SseBridgeSpec): string[] {
+  return configLines(spec, 0, bridge)
 }
 
 /** The canonical, marker-delimited `insert` block for one server. */
-export function renderServerBlock(spec: McpServerSpec): string {
+export function renderServerBlock(spec: McpServerSpec, bridge?: SseBridgeSpec): string {
   const id = rowIdFor(spec.serverName)
   return [
     blockBeginMarker(id),
@@ -177,7 +200,7 @@ export function renderServerBlock(spec: McpServerSpec): string {
     `    - id: ${id}`,
     `      name: '${MCP_CLIENT_MODULE}'`,
     '      config:',
-    ...configLines(spec, 8),
+    ...configLines(spec, 8, bridge),
     blockEndMarker(id),
   ].join('\n')
 }
@@ -273,7 +296,10 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     for (const layer of [profileLayer, homeLayer]) {
       const text = await readLayer(layer.path)
       if (text === undefined) continue
-      for (const row of listMcpRows(text)) rows.push({ id: row.id, file: layer.kind, managed: row.managed })
+      for (const row of listMcpRows(text)) {
+        const transport = transportOfConfig(options.live().configs.get(row.id), options.bridge)
+        rows.push({ id: row.id, file: layer.kind, managed: row.managed, ...transport === undefined ? {} : { transport } })
+      }
     }
     return {
       patchPath: profileLayer.path,
@@ -290,7 +316,7 @@ export function createServersService(options: ServersServiceOptions): ServersSer
     if (found === undefined) throw new ServersFault('not-found', undefined, id)
     const base = { id, file: found.layer.kind, managed: found.location.block !== undefined }
     if (found.jsExpression) return { ...base, draft: emptyDraft(), blocked: 'js-expression' }
-    const draft = draftOfConfig(options.live().configs.get(id))
+    const draft = draftOfConfig(options.live().configs.get(id), options.bridge)
     if (draft === undefined) return { ...base, draft: emptyDraft(), blocked: 'unknown-config' }
     return { ...base, draft }
   }
@@ -311,7 +337,7 @@ export function createServersService(options: ServersServiceOptions): ServersSer
       throw new ServersFault('duplicate-name', undefined, spec.serverName)
     }
     try {
-      await writeLayer(profileLayer.path, appendServerBlock(existing, renderServerBlock(spec)))
+      await writeLayer(profileLayer.path, appendServerBlock(existing, renderServerBlock(spec, options.bridge)))
     } catch (error) {
       if (error instanceof PatchShapeError) throw new ServersFault('unsupported', undefined, error.message)
       throw error
@@ -347,8 +373,8 @@ export function createServersService(options: ServersServiceOptions): ServersSer
 
     const rewritten = rewriteMcpRow(found.text, id, {
       id: newId,
-      block: renderServerBlock(spec),
-      configBody: configBodyLines(spec),
+      block: renderServerBlock(spec, options.bridge),
+      configBody: configBodyLines(spec, options.bridge),
     })
     if (rewritten === undefined) throw new ServersFault('not-found', undefined, id)
     await writeLayer(found.layer.path, rewritten)

@@ -170,10 +170,12 @@ export function ServerDialog({
               options={[
                 { value: 'stdio', label: t('transportStdio') },
                 { value: 'streamable-http', label: t('transportHttp') },
+                { value: 'sse', label: t('transportSse') },
               ]}
               onChange={(next) => { update({ transport: next }) }}
             />
           </Field>
+          {draft.transport === 'sse' ? <p className={css.fieldHint}>{t('transportSseHint')}</p> : null}
           {draft.transport === 'stdio' ? (
             <>
               <Field label={t('fieldCommand')} hint={t('fieldCommandHint')} error={errors['command']}>
@@ -222,10 +224,14 @@ export function ServerDialog({
             </>
           ) : (
             <>
-              <Field label={t('fieldUrl')} error={errors['url']}>
+              <Field
+                label={t('fieldUrl')}
+                hint={draft.transport === 'sse' ? t('fieldSseUrlHint') : undefined}
+                error={errors['url']}
+              >
                 <Input
                   value={draft.url}
-                  placeholder="https://example.com/mcp"
+                  placeholder={draft.transport === 'sse' ? 'http://127.0.0.1:50300/sse' : 'https://example.com/mcp'}
                   spellCheck={false}
                   autoComplete="off"
                   disabled={blocked !== undefined}

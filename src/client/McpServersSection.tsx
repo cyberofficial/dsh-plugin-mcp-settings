@@ -33,6 +33,7 @@ import {
   MCP_CLIENT_MODULE,
   type EditableServer,
   type McpServerDraft,
+  type McpTransport,
   type ServersMutation,
   type ServersResponse,
   type ServersSnapshot,
@@ -87,6 +88,13 @@ const PHASE_KEY: Record<NonNullable<Phase>, McpSettingsLocaleKey> = {
   active: 'statusActive',
   failed: 'statusFailed',
   unloading: 'statusUnloading',
+}
+
+/** Locale key of each transport's card badge. */
+const TRANSPORT_KEY: Record<McpTransport, McpSettingsLocaleKey> = {
+  'stdio': 'transportStdio',
+  'streamable-http': 'transportHttp',
+  'sse': 'transportSse',
 }
 
 /** How often a settling section re-reads the live row list. */
@@ -238,7 +246,9 @@ export function McpServersSection({
   const live = useRef({ settling: false, mutatedAt: 0, reload: () => {} })
   const settlingNow = view.status === 'ready' && view.servers.some(settling)
   useEffect(() => {
-    live.current = { settling: settlingNow, mutatedAt, reload }
+    // The tick re-reads the patch snapshot too: a settling row's transport
+    // badge and managed tag only appear once its live config mounts.
+    live.current = { settling: settlingNow, mutatedAt, reload: reloadAll }
   })
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -441,6 +451,9 @@ export function McpServersSection({
                     <span className={css.cardTitle} title={displayName(entry)}>{displayName(entry)}</span>
                     <span className={css.cardMeta}>
                       <code className={css.cardModule} title={entry.moduleName}>{entry.moduleName}</code>
+                      {patchRow?.transport === undefined ? null : (
+                        <Tag tone="quiet">{t(TRANSPORT_KEY[patchRow.transport])}</Tag>
+                      )}
                       {patchRow?.managed === true ? <Tag tone="quiet">{t('managedTag')}</Tag> : null}
                     </span>
                   </div>

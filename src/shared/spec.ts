@@ -35,8 +35,21 @@ const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/
 /** Characters no stored scalar may contain: YAML indentation and diagnostics stay readable. */
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/
 
-/** Which transport one server uses. */
-export type McpTransport = 'stdio' | 'streamable-http'
+/** Which transport one server uses; an `sse` server is stored as a bridged stdio row. */
+export type McpTransport = 'stdio' | 'streamable-http' | 'sse'
+
+/**
+ * How the host half launches the bundled SSE bridge for `sse` servers: the
+ * Node executable running this harness and the bridge script shipped beside
+ * `lib/`. Shared because `draftOfConfig` needs the same signature to tell an
+ * SSE row apart from a hand-written stdio one.
+ */
+export interface SseBridgeSpec {
+  /** Executable that spawns the bridge (the harness's own Node). */
+  readonly command: string
+  /** Absolute path of `bridge/sse-bridge.mjs` inside this package. */
+  readonly script: string
+}
 
 /** The patch file a row lives in: the profile's own layer, or the home layer. */
 export type PatchFileKind = 'profile' | 'home'
@@ -89,8 +102,22 @@ export interface McpStreamableHttpSpec {
   readonly failOnStartupError: boolean
 }
 
+/**
+ * A validated legacy SSE server. `@deepseek-ai/dsh-mcp-client` has no SSE
+ * transport, so this is rendered as a stdio row whose command runs the bridge
+ * this package ships; the form keeps presenting it as SSE.
+ */
+export interface McpSseSpec {
+  readonly transport: 'sse'
+  readonly serverName: string
+  readonly url: string
+  readonly headers: Readonly<Record<string, string>>
+  readonly toolCallTimeoutMs?: number
+  readonly failOnStartupError: boolean
+}
+
 /** One validated server configuration. */
-export type McpServerSpec = McpStdioSpec | McpStreamableHttpSpec
+export type McpServerSpec = McpStdioSpec | McpStreamableHttpSpec | McpSseSpec
 
 /** The draft field a problem belongs to. */
 export type SpecField =
@@ -268,7 +295,9 @@ export function validateDraft(input: unknown): SpecResult {
   else if (!SERVER_NAME_PATTERN.test(serverName)) problems.push({ field: 'serverName', reason: 'pattern' })
 
   const transport = draft.transport === 'streamable-http' ? 'streamable-http'
-    : draft.transport === 'stdio' ? 'stdio' : undefined
+    : draft.transport === 'stdio' ? 'stdio'
+    : draft.transport === 'sse' ? 'sse'
+    : undefined
   if (transport === undefined) problems.push({ field: 'transport', reason: 'invalid' })
 
   const timeout = parseTimeout(field(draft, 'toolCallTimeoutMs'))
@@ -304,7 +333,9 @@ export function validateDraft(input: unknown): SpecResult {
     }
   }
 
-  if (transport === 'streamable-http') {
+  // HTTP and SSE collect the same fields; an SSE row becomes bridged stdio
+  // when the host renders it, not here, so both halves validate identically.
+  if (transport === 'streamable-http' || transport === 'sse') {
     const url = field(draft, 'url')
     if (url === '') problems.push({ field: 'url', reason: 'required' })
     else if (CONTROL_CHARACTERS.test(url) || !isHttpUrl(url)) problems.push({ field: 'url', reason: 'invalid' })
@@ -314,7 +345,7 @@ export function validateDraft(input: unknown): SpecResult {
     return {
       ok: true,
       spec: {
-        transport: 'streamable-http',
+        transport,
         serverName,
         url,
         headers: Object.fromEntries(headers.entries.map(entry => [entry.key, entry.value])),
@@ -378,6 +409,8 @@ export interface PatchRowInfo {
   readonly file: PatchFileKind
   /** True when the row sits between this panel's own marker comments. */
   readonly managed: boolean
+  /** Which transport the row's live config uses; absent while no live entry exposes one. */
+  readonly transport?: McpTransport
 }
 
 /** What the browser reads before rendering the section's management affordances. */
@@ -469,6 +502,59 @@ function recordOf(value: unknown): Record<string, string> | undefined {
 }
 
 /**
+ * The SSE facts of one live `mcp-client` config, when it is a bridged SSE row.
+ *
+ * Identity is the bridge script as the first argument; the command is not
+ * compared, so a row written under an older Node still reads as SSE.
+ *
+ * @param config - the entry's resolved config, of unknown shape.
+ * @param bridge - the bridge the host would launch; without it nothing matches.
+ * @returns the URL and headers, or undefined when the config is not a bridged
+ *   SSE row this form can present.
+ */
+export function sseOfStdioConfig(
+  config: Record<string, unknown>,
+  bridge?: SseBridgeSpec,
+): { readonly url: string; readonly headers: Record<string, string> } | undefined {
+  if (bridge === undefined) return undefined
+  const args = config.args
+  if (!Array.isArray(args) || args.length < 2) return undefined
+  const [script, url, ...rest] = args
+  if (script !== bridge.script) return undefined
+  if (typeof url !== 'string' || !isHttpUrl(url)) return undefined
+  // Extra environment or a working directory would be lost by the SSE form,
+  // so such a row stays a plain stdio one.
+  const env = config.env
+  if (env !== undefined
+    && (typeof env !== 'object' || env === null || Array.isArray(env) || Object.keys(env).length > 0)) {
+    return undefined
+  }
+  const cwd = config.cwd
+  if (typeof cwd === 'string' && cwd !== '') return undefined
+  const headers: Record<string, string> = {}
+  for (let at = 0; at < rest.length; at += 2) {
+    if (rest[at] !== '-H' || at + 1 >= rest.length) return undefined
+    const header = rest[at + 1]
+    if (typeof header !== 'string') return undefined
+    const colon = header.indexOf(':')
+    if (colon <= 0) return undefined
+    headers[header.slice(0, colon).trim()] = header.slice(colon + 1).trim()
+  }
+  return { url, headers }
+}
+
+/** Which transport one live `mcp-client` config effectively uses. */
+export function transportOfConfig(config: unknown, bridge?: SseBridgeSpec): McpTransport | undefined {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined
+  const value = config as Record<string, unknown>
+  if (value.transport === 'streamable-http') return 'streamable-http'
+  if (value.transport === 'stdio') {
+    return sseOfStdioConfig(value, bridge) !== undefined ? 'sse' : 'stdio'
+  }
+  return undefined
+}
+
+/**
  * Turn one resolved `mcp-client` config back into the dialog's flat draft.
  *
  * The host reads this from the live Loader entry rather than from the patch
@@ -480,7 +566,7 @@ function recordOf(value: unknown): Record<string, string> | undefined {
  * @param config - the entry's resolved `config`, of unknown shape.
  * @returns the draft, or undefined when the shape is not one this form can edit.
  */
-export function draftOfConfig(config: unknown): McpServerDraft | undefined {
+export function draftOfConfig(config: unknown, bridge?: SseBridgeSpec): McpServerDraft | undefined {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined
   const value = config as Record<string, unknown>
   const serverName = typeof value.serverName === 'string' ? value.serverName : undefined
@@ -499,6 +585,22 @@ export function draftOfConfig(config: unknown): McpServerDraft | undefined {
   } as const
 
   if (transport === 'stdio') {
+    // A bridged SSE row keeps presenting as the transport the user chose, not
+    // as the bridge's command line; anything the SSE form cannot carry falls
+    // through to the plain stdio shape below, which round-trips it verbatim.
+    const sse = sseOfStdioConfig(value, bridge)
+    if (sse !== undefined) {
+      return {
+        ...base,
+        transport: 'sse',
+        command: '',
+        argsText: '',
+        envText: '',
+        cwd: '',
+        url: sse.url,
+        headersText: recordLines(sse.headers, ':'),
+      }
+    }
     const command = value.command
     if (typeof command !== 'string' || CONTROL_CHARACTERS.test(command)) return undefined
     const args = value.args === undefined
